@@ -91,7 +91,6 @@
         });
         window.addEventListener('unhandledrejection', (e) => {
             const r = e.reason;
-            // ブラウザ拡張由来の無害なエラーは無視
             const msg = r && r.message ? r.message : String(r);
             if (msg.includes('message channel closed')) return;
             showError("非同期エラー", `${msg}\n${r && r.stack ? r.stack : ''}`);
@@ -248,13 +247,18 @@
 
                 avatar.updateMatrixWorld(true);
 
-                // モデル自体の身長を測る（Hipsから足首までの距離）
-                const _hipsPos = new THREE.Vector3();
-                const _footPos = new THREE.Vector3();
-                B.hips.getWorldPosition(_hipsPos);
-                B.lFoot.getWorldPosition(_footPos);
-                const MODEL_HIP_TO_FOOT = _hipsPos.distanceTo(_footPos);
-                console.log("[INFO] モデルの腰→足首距離:", MODEL_HIP_TO_FOOT);
+                // ★ Hips のバインド時ローカル位置を記録（足が床にくっつく基準位置）
+                const bindHipsLocalPos = B.hips.position.clone();
+                console.log("[INFO] Hipsバインド位置:", bindHipsLocalPos);
+
+                // 参考：Hips ワールド位置（足の接地確認用）
+                const _hipsWorldPos = new THREE.Vector3();
+                B.hips.getWorldPosition(_hipsWorldPos);
+                console.log("[INFO] Hipsワールド位置:", _hipsWorldPos);
+
+                const _footWorldPos = new THREE.Vector3();
+                B.lFoot.getWorldPosition(_footWorldPos);
+                console.log("[INFO] LeftFootワールド位置:", _footWorldPos);
 
                 const _vA = new THREE.Vector3();
                 const _vB = new THREE.Vector3();
@@ -344,17 +348,16 @@
                     video.src = URL.createObjectURL(file);
                     video.load();
                     video.play().catch(err => console.warn('再生開始に失敗:', err));
-                    // ★ 状態を完全リセット
                     firstFrame = true;
                     lastVideoTime = -1;
-                    // ★ タイムスタンプは前動画から進める形にする（巻き戻すと MediaPipe が止まる）
-                    // lastTs はリセットせず、必ず前回+1以上を使い続ける
                 });
 
                 const lm = new Array(33).fill(null).map(() => new THREE.Vector3());
                 const lmRaw = new Array(33).fill(null).map(() => new THREE.Vector3());
                 let firstFrame = true;
                 const SMOOTH = 0.4;
+                // ★ 水平移動の表示倍率（被写体の動きをモデルにどれくらい反映するか）
+                const HORIZONTAL_SCALE = 1.0;
 
                 const _qDelta = new THREE.Quaternion();
                 const _qTargetWorld = new THREE.Quaternion();
@@ -376,7 +379,7 @@
                 }
 
                 let lastVideoTime = -1;
-                let lastTs = 0; // 単調増加保証のため、リセットしない
+                let lastTs = 0;
                 const tmpA = new THREE.Vector3();
                 const tmpHipRight = new THREE.Vector3();
                 const tmpHipMid = new THREE.Vector3();
@@ -386,14 +389,12 @@
                 const tmpTrueUp = new THREE.Vector3();
                 const tmpMat = new THREE.Matrix4();
                 const tmpHipWorldQuat = new THREE.Quaternion();
-                const tmpAnkleMid = new THREE.Vector3();
 
                 function renderLoop() {
                     requestAnimationFrame(renderLoop);
 
                     if (video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime && poseLandmarker) {
                         lastVideoTime = video.currentTime;
-                        // ★ 単調増加するタイムスタンプ（リアル時間ベース、動画切り替えにも対応）
                         lastTs = Math.max(lastTs + 1, Math.round(performance.now()));
 
                         try {
@@ -411,18 +412,13 @@
                                     for (let i = 0; i < 33; i++) lm[i].lerp(lmRaw[i], SMOOTH);
                                 }
 
-                                // ===== Hips の位置（足が床につくよう自動調整） =====
+                                // ===== Hips の位置 =====
+                                // モデルのバインド位置を基準に、被写体の水平移動だけ反映
+                                // Y はバインド値固定（足が床にくっつくモデル本来の高さ）
                                 tmpHipMid.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
-                                tmpAnkleMid.addVectors(lm[27], lm[28]).multiplyScalar(0.5);
-                                // 被写体の「腰→足首」距離（worldLandmarks単位）
-                                const subjectHipToAnkle = tmpHipMid.distanceTo(tmpAnkleMid);
-                                // モデルの「腰→足首」距離に合わせるためのスケール
-                                // ※worldLandmarks は被写体実寸（メートル）。子供だと~0.4m、大人~0.8m
-                                // Hips Y = 床(0) + 腰の高さ。腰の高さは腰→足首の距離で近似
-                                // さらに lm[23,24] の Y は腰中心からの相対 = 0 付近なので、絶対 Y を tmpHipMid.y + subjectHipToAnkle で算出
-                                B.hips.position.x = tmpHipMid.x;
-                                B.hips.position.y = tmpHipMid.y + subjectHipToAnkle * 1.0; // 微調整係数
-                                B.hips.position.z = tmpHipMid.z;
+                                B.hips.position.x = bindHipsLocalPos.x + tmpHipMid.x * HORIZONTAL_SCALE;
+                                B.hips.position.y = bindHipsLocalPos.y;
+                                B.hips.position.z = bindHipsLocalPos.z + tmpHipMid.z * HORIZONTAL_SCALE;
 
                                 // ===== Hips の回転 =====
                                 tmpHipRight.subVectors(lm[23], lm[24]).normalize();
