@@ -9,7 +9,8 @@
         {
             "imports": {
                 "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/",
+                "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs"
             }
         }
     </script>
@@ -35,7 +36,7 @@
     <!-- メインコンテンツ領域 -->
     <div class="flex-1 flex flex-col p-2 gap-2 overflow-hidden bg-[#0a0a0a]">
         
-        <!-- 左側/上部：動画プレーヤー -->
+        <!-- 上部：動画プレーヤー -->
         <div class="flex-1 bg-black rounded-lg border border-[#333] relative overflow-hidden flex justify-center items-center shadow-lg">
             <video id="input-video" class="max-h-full max-w-full object-contain" controls loop playsinline muted></video>
             
@@ -57,7 +58,7 @@
             </div>
         </div>
 
-        <!-- 右側/下部：3D描画キャンバス -->
+        <!-- 下部：3D描画キャンバス -->
         <div id="canvas-container" class="flex-1 bg-[#1a1a1a] rounded-lg border border-[#333] relative overflow-hidden shadow-lg">
             <div class="absolute bottom-2 right-2 bg-black/60 backdrop-blur px-2 py-1 text-[10px] md:text-xs text-gray-300 rounded border border-gray-700 pointer-events-none">
                 スワイプ: 回転 | ピンチ: 拡大
@@ -96,11 +97,14 @@
         }
 
         // 予期せぬエラーのキャッチ
-        window.onerror = (message, source, lineno, colno, error) => {
+        window.onerror = (message) => {
             showError("予期せぬエラーが発生しました", `${message}`);
         };
+        window.addEventListener('unhandledrejection', (e) => {
+            showError("予期せぬエラーが発生しました", `${e.reason && e.reason.message ? e.reason.message : e.reason}`);
+        });
 
-        // 進捗付きでファイルをダウンロードする関数
+        // 進捗付きでファイルをダウンロードする関数（ArrayBuffer を返す）
         async function fetchWithProgress(url, onProgress) {
             const response = await fetch(url);
             if (!response.ok) throw new Error(`ダウンロード失敗: HTTP ${response.status}`);
@@ -112,8 +116,8 @@
             const reader = response.body.getReader();
             const chunks = [];
 
-            while(true) {
-                const {done, value} = await reader.read();
+            while (true) {
+                const { done, value } = await reader.read();
                 if (done) break;
                 
                 chunks.push(value);
@@ -127,11 +131,17 @@
                 }
             }
 
-            const blob = new Blob(chunks, { type: 'application/octet-stream' });
-            return URL.createObjectURL(blob);
+            // チャンクを1つの Uint8Array に結合
+            const buffer = new Uint8Array(loaded);
+            let offset = 0;
+            for (const chunk of chunks) {
+                buffer.set(chunk, offset);
+                offset += chunk.length;
+            }
+            return buffer;
         }
 
-        // メイン処理（動的読み込みによりフリーズを防ぐ）
+        // メイン処理
         async function main() {
             try {
                 // =====================================
@@ -140,11 +150,10 @@
                 statusText.innerText = "手順(1/4): プログラムを取得中...";
                 subStatus.innerText = "3DとAIのライブラリを読み込んでいます";
 
-                // 動的インポート（ここで止まってもエラーがキャッチできる）
                 const THREE = await import('three');
                 const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
-                // ↓ ここを unpkg から jsdelivr に変更
-                const { PoseLandmarker, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js');
+                // ESM 版を使用（重要：.mjs）
+                const { PoseLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
 
                 // =====================================
                 // 2. 3D空間のセットアップ
@@ -158,8 +167,8 @@
                 camera.position.set(0, 1.2, 4.5);
 
                 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
                 canvasContainer.appendChild(renderer.domElement);
 
                 const controls = new OrbitControls(camera, renderer.domElement);
@@ -220,7 +229,7 @@
                 // =====================================
                 statusText.innerText = "手順(3/4): AIエンジンを準備中...";
                 subStatus.innerText = "ブラウザの環境を整えています";
-                // ↓ ここも unpkg から jsdelivr に変更
+
                 const vision = await FilesetResolver.forVisionTasks(
                     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
                 );
@@ -234,7 +243,7 @@
                 
                 const modelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
                 
-                const localModelUrl = await fetchWithProgress(modelUrl, (pct, loadedBytes) => {
+                const modelBuffer = await fetchWithProgress(modelUrl, (pct, loadedBytes) => {
                     if (pct >= 0) {
                         progressBar.style.width = `${pct}%`;
                         progressText.innerText = `${pct}%`;
@@ -251,7 +260,7 @@
 
                 const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
                     baseOptions: {
-                        modelAssetPath: localModelUrl,
+                        modelAssetBuffer: modelBuffer,
                         delegate: "GPU"
                     },
                     runningMode: "VIDEO",
@@ -283,7 +292,7 @@
                     if (video.src) URL.revokeObjectURL(video.src);
                     video.src = URL.createObjectURL(file);
                     video.load();
-                    video.play();
+                    video.play().catch(err => console.warn('再生開始に失敗:', err));
                 });
 
                 let lastVideoTime = -1;
@@ -313,7 +322,7 @@
                                     bones[i].geometry.attributes.position.needsUpdate = true;
                                 });
                             }
-                        } catch(e) {
+                        } catch (e) {
                             console.error("推論エラー:", e);
                         }
                     }
@@ -325,13 +334,13 @@
                 window.addEventListener('resize', () => {
                     camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
                     camera.updateProjectionMatrix();
+                    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
                     renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
                 });
 
                 renderLoop();
 
             } catch (error) {
-                // いずれかの手順で失敗した場合、ここにエラーが出る
                 showError("起動エラー", error.message || error.toString());
                 console.error(error);
             }
@@ -343,3 +352,4 @@
     </script>
 </body>
 </html>
+
