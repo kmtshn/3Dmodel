@@ -3,181 +3,486 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>診断モード</title>
+    <title>Web 3D Motion Capture (GLTF Avatar)</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { margin: 0; background-color: #121212; color: #eee; font-family: sans-serif; }
-        #log-area {
-            padding: 16px;
-            white-space: pre-wrap;
-            word-break: break-all;
-            font-family: ui-monospace, "SF Mono", Menlo, monospace;
-            font-size: 12px;
-            line-height: 1.5;
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
         }
-        .ok { color: #4ade80; }
-        .err { color: #f87171; }
-        .info { color: #60a5fa; }
-        .step { color: #facc15; font-weight: bold; }
-        h1 { padding: 12px 16px; margin: 0; border-bottom: 1px solid #333; background: #1e1e1e; }
+    }
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #121212; touch-action: none; }
     </style>
 </head>
-<body>
+<body class="text-gray-200 h-screen flex flex-col font-sans">
 
-<h1 class="text-base font-bold">🔬 import 診断モード</h1>
-<div id="log-area"></div>
+    <header class="p-3 md:p-4 bg-[#1e1e1e] border-b border-[#333] flex justify-between items-center z-10 shadow-md">
+        <h1 class="text-base md:text-xl font-bold tracking-wider text-blue-400">3D MOTION AI</h1>
+        <div class="flex items-center gap-2">
+            <input type="file" id="video-upload" accept="video/mp4,video/mov,video/webm" class="hidden">
+            <button id="upload-btn" disabled class="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-400 text-sm md:text-base px-4 py-2 rounded-full font-semibold transition-colors flex items-center gap-2 shadow">
+                動画を選択
+            </button>
+        </div>
+    </header>
 
-<script type="importmap">
-{
-    "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
-    }
-}
-</script>
+    <div class="flex-1 flex flex-col p-2 gap-2 overflow-hidden bg-[#0a0a0a]">
+        <div class="flex-1 bg-black rounded-lg border border-[#333] relative overflow-hidden flex justify-center items-center shadow-lg">
+            <video id="input-video" class="max-h-full max-w-full object-contain" controls loop playsinline muted></video>
 
-<script type="module">
-    const logArea = document.getElementById('log-area');
+            <div id="overlay" class="absolute inset-0 bg-[#111] bg-opacity-95 flex flex-col items-center justify-center z-10 transition-opacity duration-500 p-6 text-center">
+                <div id="spinner" class="animate-spin rounded-full h-10 w-10 border-4 border-gray-600 border-t-blue-500 mb-4"></div>
+                <p id="status-text" class="text-base md:text-lg font-medium tracking-wide">起動中...</p>
+                <p id="sub-status" class="text-xs md:text-sm text-gray-400 mt-2 mb-4">しばらくお待ちください</p>
 
-    function addLog(msg, cls = "") {
-        const time = new Date().toLocaleTimeString('ja-JP', { hour12: false }) +
-                     '.' + String(Date.now() % 1000).padStart(3, '0');
-        const line = document.createElement('div');
-        line.className = cls;
-        line.textContent = `[${time}] ${msg}`;
-        logArea.appendChild(line);
-        console.log("[DIAG]", msg);
-    }
+                <div id="progress-container" class="w-full max-w-xs hidden">
+                    <div class="w-full bg-gray-700 rounded-full h-2.5 mb-1 overflow-hidden">
+                        <div id="progress-bar" class="bg-blue-500 h-2.5 rounded-full transition-all duration-200" style="width: 0%"></div>
+                    </div>
+                    <p id="progress-text" class="text-sm font-bold text-blue-400">0%</p>
+                </div>
 
-    function logStep(msg) { addLog("▶ " + msg, "step"); }
-    function logOk(msg)   { addLog("✓ " + msg, "ok"); }
-    function logInfo(msg) { addLog("  " + msg, "info"); }
-    function logErr(msg)  { addLog("✗ " + msg, "err"); }
+                <div id="error-box" class="hidden mt-4 p-3 bg-red-900/40 border border-red-500/50 rounded text-red-200 text-xs text-left w-full max-w-md break-all overflow-y-auto max-h-48 whitespace-pre-wrap"></div>
+            </div>
+        </div>
 
-    addLog("スクリプト開始", "info");
-    addLog(`UserAgent: ${navigator.userAgent}`, "info");
-    addLog(`URL: ${location.href}`, "info");
-    addLog(`Protocol: ${location.protocol}`, "info");
+        <div id="canvas-container" class="flex-1 bg-[#1a1a1a] rounded-lg border border-[#333] relative overflow-hidden shadow-lg">
+            <div class="absolute bottom-2 right-2 bg-black/60 backdrop-blur px-2 py-1 text-[10px] md:text-xs text-gray-300 rounded border border-gray-700 pointer-events-none">
+                スワイプ: 回転 | ピンチ: 拡大
+            </div>
+        </div>
+    </div>
 
-    window.addEventListener('error', (e) => {
-        logErr(`window.error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`);
-    });
-    window.addEventListener('unhandledrejection', (e) => {
-        const r = e.reason;
-        logErr(`unhandledrejection: ${r && r.message ? r.message : r}`);
-        if (r && r.stack) logErr(r.stack);
-    });
+    <script type="module">
+        // ====== DOM ======
+        const video = document.getElementById('input-video');
+        const canvasContainer = document.getElementById('canvas-container');
+        const uploadBtn = document.getElementById('upload-btn');
+        const videoUpload = document.getElementById('video-upload');
+        const overlay = document.getElementById('overlay');
+        const spinner = document.getElementById('spinner');
+        const statusText = document.getElementById('status-text');
+        const subStatus = document.getElementById('sub-status');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const errorBox = document.getElementById('error-box');
 
-    // タイムアウト付き
-    function withTimeout(promise, ms, label) {
-        return Promise.race([
-            promise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout ${ms}ms`)), ms))
-        ]);
-    }
-
-    (async () => {
-        try {
-            // ============ 1. three ============
-            logStep("(1/6) three.js を import...");
-            const t0 = performance.now();
-            const THREE = await withTimeout(import('three'), 15000, "three");
-            logOk(`three OK (${Math.round(performance.now() - t0)}ms)`);
-            logInfo(`THREE.REVISION = ${THREE.REVISION}`);
-
-            // ============ 2. OrbitControls ============
-            logStep("(2/6) OrbitControls を import...");
-            const t1 = performance.now();
-            const { OrbitControls } = await withTimeout(
-                import('three/addons/controls/OrbitControls.js'),
-                15000, "OrbitControls"
-            );
-            logOk(`OrbitControls OK (${Math.round(performance.now() - t1)}ms)`);
-            logInfo(`typeof OrbitControls = ${typeof OrbitControls}`);
-
-            // ============ 3. GLTFLoader ============
-            logStep("(3/6) GLTFLoader を import...");
-            const t2 = performance.now();
-            const { GLTFLoader } = await withTimeout(
-                import('three/addons/loaders/GLTFLoader.js'),
-                15000, "GLTFLoader"
-            );
-            logOk(`GLTFLoader OK (${Math.round(performance.now() - t2)}ms)`);
-            logInfo(`typeof GLTFLoader = ${typeof GLTFLoader}`);
-
-            // ============ 4. MediaPipe ============
-            logStep("(4/6) MediaPipe tasks-vision を import...");
-            const t3 = performance.now();
-            const mp = await withTimeout(
-                import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs'),
-                30000, "MediaPipe"
-            );
-            logOk(`MediaPipe OK (${Math.round(performance.now() - t3)}ms)`);
-            logInfo(`exports: ${Object.keys(mp).slice(0, 20).join(', ')}`);
-            logInfo(`PoseLandmarker: ${typeof mp.PoseLandmarker}`);
-            logInfo(`FilesetResolver: ${typeof mp.FilesetResolver}`);
-
-            if (!mp.PoseLandmarker || !mp.FilesetResolver) {
-                throw new Error("MediaPipe のエクスポート不足");
-            }
-
-            // ============ 5. FilesetResolver ============
-            logStep("(5/6) FilesetResolver.forVisionTasks...");
-            const t4 = performance.now();
-            const vision = await withTimeout(
-                mp.FilesetResolver.forVisionTasks(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
-                ),
-                30000, "FilesetResolver"
-            );
-            logOk(`FilesetResolver OK (${Math.round(performance.now() - t4)}ms)`);
-
-            // ============ 6. モデルダウンロード ============
-            logStep("(6/6) AIモデル取得...");
-            const t5 = performance.now();
-            const modelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-            const response = await withTimeout(fetch(modelUrl), 30000, "model fetch");
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const buf = await response.arrayBuffer();
-            logOk(`モデル取得 OK (${Math.round(performance.now() - t5)}ms, ${Math.round(buf.byteLength / 1024)} KB)`);
-
-            // ============ 7. PoseLandmarker 生成 ============
-            logStep("(追加) PoseLandmarker.createFromOptions (GPU)...");
-            const t6 = performance.now();
-            let poseLandmarker;
-            try {
-                poseLandmarker = await withTimeout(
-                    mp.PoseLandmarker.createFromOptions(vision, {
-                        baseOptions: { modelAssetBuffer: new Uint8Array(buf), delegate: "GPU" },
-                        runningMode: "VIDEO",
-                        numPoses: 1
-                    }),
-                    20000, "PoseLandmarker(GPU)"
-                );
-                logOk(`PoseLandmarker(GPU) OK (${Math.round(performance.now() - t6)}ms)`);
-            } catch (gpuErr) {
-                logErr(`GPU失敗: ${gpuErr.message}, CPUで再試行`);
-                const t7 = performance.now();
-                poseLandmarker = await withTimeout(
-                    mp.PoseLandmarker.createFromOptions(vision, {
-                        baseOptions: { modelAssetBuffer: new Uint8Array(buf), delegate: "CPU" },
-                        runningMode: "VIDEO",
-                        numPoses: 1
-                    }),
-                    20000, "PoseLandmarker(CPU)"
-                );
-                logOk(`PoseLandmarker(CPU) OK (${Math.round(performance.now() - t7)}ms)`);
-            }
-
-            addLog("", "");
-            logOk("🎉 全工程成功！本番コードもこの環境で動くはずです。");
-
-        } catch (err) {
-            logErr(`エラー: ${err.message || err}`);
-            if (err.stack) logErr(err.stack);
+        let currentStep = "init";
+        function setStep(label, sub = "") {
+            currentStep = label;
+            statusText.innerText = label;
+            if (sub) subStatus.innerText = sub;
+            console.log("[STEP]", label, sub);
         }
-    })();
-</script>
+        function showError(msg, details = "") {
+            spinner.classList.add('hidden');
+            progressContainer.classList.add('hidden');
+            statusText.innerText = msg;
+            statusText.classList.add('text-red-400');
+            subStatus.innerText = `直前ステップ: ${currentStep}`;
+            errorBox.classList.remove('hidden');
+            errorBox.innerText = details || "(詳細なし)";
+        }
+        window.addEventListener('error', (e) => {
+            showError("予期せぬエラー", `${e.message}\n${e.filename}:${e.lineno}:${e.colno}`);
+        });
+        window.addEventListener('unhandledrejection', (e) => {
+            const r = e.reason;
+            showError("非同期エラー", `${r && r.message ? r.message : r}\n${r && r.stack ? r.stack : ''}`);
+        });
 
+        function withTimeout(promise, ms, label) {
+            return Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} がタイムアウト(${ms}ms)`)), ms))
+            ]);
+        }
+
+        async function fetchWithProgress(url, onProgress) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`ダウンロード失敗: HTTP ${response.status} (${url})`);
+            const contentLength = response.headers.get('content-length');
+            const total = contentLength ? parseInt(contentLength, 10) : 0;
+            let loaded = 0;
+            const reader = response.body.getReader();
+            const chunks = [];
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                loaded += value.length;
+                if (total) onProgress(Math.round((loaded / total) * 100));
+                else onProgress(-1, loaded);
+            }
+            const buffer = new Uint8Array(loaded);
+            let offset = 0;
+            for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.length; }
+            return buffer;
+        }
+
+        async function main() {
+            try {
+                // ====== ライブラリ読み込み ======
+                setStep("手順(1/6): three.js を読み込み中...", "3Dライブラリを取得しています");
+                const THREE = await withTimeout(import('three'), 15000, "three");
+
+                setStep("手順(2/6): アドオン読み込み中...", "OrbitControls / GLTFLoader");
+                const { OrbitControls } = await withTimeout(import('three/addons/controls/OrbitControls.js'), 15000, "OrbitControls");
+                const { GLTFLoader } = await withTimeout(import('three/addons/loaders/GLTFLoader.js'), 15000, "GLTFLoader");
+
+                setStep("手順(3/6): MediaPipe を読み込み中...", "AIエンジンライブラリ取得");
+                const mp = await withTimeout(
+                    import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs'),
+                    30000, "MediaPipe"
+                );
+                const { PoseLandmarker, FilesetResolver } = mp;
+                if (!PoseLandmarker || !FilesetResolver) {
+                    throw new Error("MediaPipe のエクスポート不足: " + Object.keys(mp).join(', '));
+                }
+
+                // ====== 3D空間 ======
+                setStep("手順(4/6): 3D空間を準備中...", "シーンを構築しています");
+
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x1a1a1a);
+                const camera = new THREE.PerspectiveCamera(45, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 100);
+                camera.position.set(0, 1.5, 4.0);
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                renderer.outputColorSpace = THREE.SRGBColorSpace;
+                canvasContainer.appendChild(renderer.domElement);
+
+                const controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.target.set(0, 1.0, 0);
+
+                scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+                const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+                dirLight.position.set(3, 6, 3);
+                dirLight.castShadow = true;
+                dirLight.shadow.mapSize.set(1024, 1024);
+                dirLight.shadow.camera.left = -3;
+                dirLight.shadow.camera.right = 3;
+                dirLight.shadow.camera.top = 4;
+                dirLight.shadow.camera.bottom = -1;
+                scene.add(dirLight);
+                const rim = new THREE.DirectionalLight(0x88aaff, 0.4);
+                rim.position.set(-3, 2, -3);
+                scene.add(rim);
+
+                const floorGeo = new THREE.PlaneGeometry(20, 20);
+                const floorMat = new THREE.MeshStandardMaterial({ color: 0x222831, roughness: 0.9 });
+                const floor = new THREE.Mesh(floorGeo, floorMat);
+                floor.rotation.x = -Math.PI / 2;
+                floor.position.y = 0;
+                floor.receiveShadow = true;
+                scene.add(floor);
+                const grid = new THREE.GridHelper(10, 10, 0x444444, 0x2a2a2a);
+                grid.position.y = 0.01;
+                scene.add(grid);
+
+                // ====== GLTFアバター ======
+                setStep("手順(5/6): キャラクターモデル読み込み中...", "Xbot を取得しています");
+
+                // 正しい URL: npm パッケージから直接
+                const XBOT_URL = 'https://cdn.jsdelivr.net/npm/three@0.158.0/examples/models/gltf/Xbot.glb';
+
+                const gltfLoader = new GLTFLoader();
+                const gltf = await withTimeout(
+                    new Promise((resolve, reject) => {
+                        gltfLoader.load(
+                            XBOT_URL,
+                            resolve,
+                            (xhr) => {
+                                if (xhr.lengthComputable) {
+                                    const pct = Math.round(xhr.loaded / xhr.total * 100);
+                                    subStatus.innerText = `モデル取得中: ${pct}%`;
+                                }
+                            },
+                            (err) => reject(new Error(`GLTF読み込み失敗: ${err && err.message ? err.message : err}`))
+                        );
+                    }),
+                    30000, "GLTF Xbot"
+                );
+
+                const avatar = gltf.scene;
+                avatar.traverse(obj => {
+                    if (obj.isMesh) {
+                        obj.castShadow = true;
+                        obj.receiveShadow = true;
+                        obj.frustumCulled = false;
+                    }
+                });
+                scene.add(avatar);
+
+                // ボーン取得
+                const bones = {};
+                avatar.traverse(o => { if (o.isBone) bones[o.name] = o; });
+                console.log("ボーン一覧:", Object.keys(bones));
+
+                const B = {
+                    hips:      bones['mixamorigHips'],
+                    spine:     bones['mixamorigSpine'],
+                    neck:      bones['mixamorigNeck'],
+                    head:      bones['mixamorigHead'],
+                    lArm:      bones['mixamorigLeftArm'],
+                    lForeArm:  bones['mixamorigLeftForeArm'],
+                    lHand:     bones['mixamorigLeftHand'],
+                    rArm:      bones['mixamorigRightArm'],
+                    rForeArm:  bones['mixamorigRightForeArm'],
+                    rHand:     bones['mixamorigRightHand'],
+                    lUpLeg:    bones['mixamorigLeftUpLeg'],
+                    lLeg:      bones['mixamorigLeftLeg'],
+                    lFoot:     bones['mixamorigLeftFoot'],
+                    rUpLeg:    bones['mixamorigRightUpLeg'],
+                    rLeg:      bones['mixamorigRightLeg'],
+                    rFoot:     bones['mixamorigRightFoot'],
+                };
+                if (!B.hips) {
+                    throw new Error("Hips ボーンが見つかりません。\n見つかったボーン: " + Object.keys(bones).join(', '));
+                }
+
+                // バインドポーズ記録
+                avatar.updateMatrixWorld(true);
+
+                const _vA = new THREE.Vector3();
+                const _vB = new THREE.Vector3();
+                function worldDir(boneFrom, boneTo) {
+                    boneFrom.getWorldPosition(_vA);
+                    boneTo.getWorldPosition(_vB);
+                    return new THREE.Vector3().subVectors(_vB, _vA).normalize();
+                }
+
+                const bindDir = {
+                    lArm:     worldDir(B.lArm, B.lForeArm),
+                    lForeArm: worldDir(B.lForeArm, B.lHand),
+                    rArm:     worldDir(B.rArm, B.rForeArm),
+                    rForeArm: worldDir(B.rForeArm, B.rHand),
+                    lUpLeg:   worldDir(B.lUpLeg, B.lLeg),
+                    lLeg:     worldDir(B.lLeg, B.lFoot),
+                    rUpLeg:   worldDir(B.rUpLeg, B.rLeg),
+                    rLeg:     worldDir(B.rLeg, B.rFoot),
+                };
+                const bindWorldQuat = {};
+                for (const key of Object.keys(B)) {
+                    if (!B[key]) continue;
+                    bindWorldQuat[key] = new THREE.Quaternion();
+                    B[key].getWorldQuaternion(bindWorldQuat[key]);
+                }
+                // Hips のバインド時ワールド回転（後で差分計算に使う）
+                const bindHipsWorldQuat = bindWorldQuat.hips.clone();
+                const bindHipsWorldQuatInv = bindHipsWorldQuat.clone().invert();
+
+                // ====== AIエンジン ======
+                setStep("手順(6/6): AIエンジン初期化中...", "WASM環境を整えています");
+                const vision = await withTimeout(
+                    FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"),
+                    30000, "FilesetResolver"
+                );
+
+                setStep("AIモデルをダウンロード中...", "約7MBのデータを取得します");
+                progressContainer.classList.remove('hidden');
+                const modelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+                const modelBuffer = await fetchWithProgress(modelUrl, (pct, loadedBytes) => {
+                    if (pct >= 0) {
+                        progressBar.style.width = `${pct}%`;
+                        progressText.innerText = `${pct}%`;
+                    } else {
+                        progressText.innerText = `${Math.round(loadedBytes / 1024 / 1024 * 10) / 10} MB`;
+                        progressBar.style.width = '100%';
+                        progressBar.classList.add('animate-pulse');
+                    }
+                });
+                progressContainer.classList.add('hidden');
+
+                setStep("最終調整中...", "モデルを起動しています");
+                let poseLandmarker;
+                try {
+                    poseLandmarker = await withTimeout(
+                        PoseLandmarker.createFromOptions(vision, {
+                            baseOptions: { modelAssetBuffer: modelBuffer, delegate: "GPU" },
+                            runningMode: "VIDEO",
+                            numPoses: 1
+                        }),
+                        20000, "PoseLandmarker(GPU)"
+                    );
+                } catch (gpuErr) {
+                    console.warn("GPU失敗、CPUで再試行:", gpuErr);
+                    poseLandmarker = await withTimeout(
+                        PoseLandmarker.createFromOptions(vision, {
+                            baseOptions: { modelAssetBuffer: modelBuffer, delegate: "CPU" },
+                            runningMode: "VIDEO",
+                            numPoses: 1
+                        }),
+                        20000, "PoseLandmarker(CPU)"
+                    );
+                }
+
+                spinner.classList.add('hidden');
+                statusText.innerText = "準備完了！";
+                subStatus.innerText = "上の「動画を選択」ボタンから動画を選んでください";
+                uploadBtn.disabled = false;
+                setTimeout(() => {
+                    if (video.src === "") overlay.style.backgroundColor = "rgba(17, 17, 17, 0.7)";
+                }, 1000);
+
+                // ====== イベント ======
+                uploadBtn.addEventListener('click', () => videoUpload.click());
+                videoUpload.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    overlay.style.opacity = '0';
+                    setTimeout(() => overlay.classList.add('hidden'), 500);
+                    if (video.src) URL.revokeObjectURL(video.src);
+                    video.src = URL.createObjectURL(file);
+                    video.load();
+                    video.play().catch(err => console.warn('再生開始に失敗:', err));
+                    firstFrame = true;
+                    lastTs = -1;
+                });
+
+                // ====== 姿勢適用 ======
+                const lm = new Array(33).fill(null).map(() => new THREE.Vector3());
+                const lmRaw = new Array(33).fill(null).map(() => new THREE.Vector3());
+                let firstFrame = true;
+                const SMOOTH = 0.4;
+
+                const _qDelta = new THREE.Quaternion();
+                const _qTargetWorld = new THREE.Quaternion();
+                const _qParentWorld = new THREE.Quaternion();
+                const _qParentInv = new THREE.Quaternion();
+
+                function applyBoneByDirection(bone, bindDirVec, currentDirVec, bindWorldQ) {
+                    if (!bone || currentDirVec.lengthSq() < 1e-8) return;
+                    currentDirVec.normalize();
+                    _qDelta.setFromUnitVectors(bindDirVec, currentDirVec);
+                    _qTargetWorld.multiplyQuaternions(_qDelta, bindWorldQ);
+                    if (bone.parent && bone.parent.isBone) {
+                        bone.parent.getWorldQuaternion(_qParentWorld);
+                        _qParentInv.copy(_qParentWorld).invert();
+                        bone.quaternion.copy(_qParentInv).multiply(_qTargetWorld);
+                    } else {
+                        bone.quaternion.copy(_qTargetWorld);
+                    }
+                }
+
+                // ====== 描画ループ ======
+                let lastVideoTime = -1;
+                let lastTs = -1;
+                const tmpA = new THREE.Vector3();
+                const tmpHipRight = new THREE.Vector3();
+                const tmpHipMid = new THREE.Vector3();
+                const tmpShoulderMid = new THREE.Vector3();
+                const tmpUp = new THREE.Vector3();
+                const tmpFwd = new THREE.Vector3();
+                const tmpTrueUp = new THREE.Vector3();
+                const tmpMat = new THREE.Matrix4();
+                const tmpHipWorldQuat = new THREE.Quaternion();
+                const ROOT_Y_OFFSET = 1.0;
+
+                function renderLoop() {
+                    requestAnimationFrame(renderLoop);
+
+                    if (video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime && poseLandmarker) {
+                        lastVideoTime = video.currentTime;
+                        let ts = Math.round(video.currentTime * 1000);
+                        if (ts <= lastTs) ts = lastTs + 1;
+                        lastTs = ts;
+
+                        try {
+                            const results = poseLandmarker.detectForVideo(video, ts);
+                            if (results.worldLandmarks && results.worldLandmarks.length > 0) {
+                                const w = results.worldLandmarks[0];
+
+                                // 座標変換: MediaPipe(X右,Y下,Z前) → Three(X右,Y上,Z後ろ)
+                                for (let i = 0; i < 33; i++) {
+                                    lmRaw[i].set(w[i].x, -w[i].y, -w[i].z);
+                                }
+                                if (firstFrame) {
+                                    for (let i = 0; i < 33; i++) lm[i].copy(lmRaw[i]);
+                                    firstFrame = false;
+                                } else {
+                                    for (let i = 0; i < 33; i++) lm[i].lerp(lmRaw[i], SMOOTH);
+                                }
+
+                                // Hips 位置
+                                tmpHipMid.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
+                                B.hips.position.set(tmpHipMid.x, tmpHipMid.y + ROOT_Y_OFFSET, tmpHipMid.z);
+
+                                // Hips 回転：腰の左右ベクトルと腰→肩ベクトルから直交基底
+                                tmpHipRight.subVectors(lm[23], lm[24]).normalize();
+                                tmpShoulderMid.addVectors(lm[11], lm[12]).multiplyScalar(0.5);
+                                tmpUp.subVectors(tmpShoulderMid, tmpHipMid).normalize();
+                                tmpFwd.crossVectors(tmpHipRight, tmpUp).normalize();
+                                tmpTrueUp.crossVectors(tmpFwd, tmpHipRight).normalize();
+                                tmpMat.makeBasis(tmpHipRight, tmpTrueUp, tmpFwd);
+                                tmpHipWorldQuat.setFromRotationMatrix(tmpMat);
+                                // バインド時 Hips ワールド回転からの差分をローカルに（Hips の親は非ボーンなので近似で OK）
+                                B.hips.quaternion.copy(tmpHipWorldQuat).multiply(bindHipsWorldQuatInv);
+
+                                avatar.updateMatrixWorld(true);
+
+                                // 左腕
+                                tmpA.subVectors(lm[13], lm[11]).normalize();
+                                applyBoneByDirection(B.lArm, bindDir.lArm, tmpA, bindWorldQuat.lArm);
+                                avatar.updateMatrixWorld(true);
+                                tmpA.subVectors(lm[15], lm[13]).normalize();
+                                applyBoneByDirection(B.lForeArm, bindDir.lForeArm, tmpA, bindWorldQuat.lForeArm);
+
+                                // 右腕
+                                tmpA.subVectors(lm[14], lm[12]).normalize();
+                                applyBoneByDirection(B.rArm, bindDir.rArm, tmpA, bindWorldQuat.rArm);
+                                avatar.updateMatrixWorld(true);
+                                tmpA.subVectors(lm[16], lm[14]).normalize();
+                                applyBoneByDirection(B.rForeArm, bindDir.rForeArm, tmpA, bindWorldQuat.rForeArm);
+
+                                // 左脚
+                                tmpA.subVectors(lm[25], lm[23]).normalize();
+                                applyBoneByDirection(B.lUpLeg, bindDir.lUpLeg, tmpA, bindWorldQuat.lUpLeg);
+                                avatar.updateMatrixWorld(true);
+                                tmpA.subVectors(lm[27], lm[25]).normalize();
+                                applyBoneByDirection(B.lLeg, bindDir.lLeg, tmpA, bindWorldQuat.lLeg);
+
+                                // 右脚
+                                tmpA.subVectors(lm[26], lm[24]).normalize();
+                                applyBoneByDirection(B.rUpLeg, bindDir.rUpLeg, tmpA, bindWorldQuat.rUpLeg);
+                                avatar.updateMatrixWorld(true);
+                                tmpA.subVectors(lm[28], lm[26]).normalize();
+                                applyBoneByDirection(B.rLeg, bindDir.rLeg, tmpA, bindWorldQuat.rLeg);
+                            }
+                        } catch (e) {
+                            console.error("推論エラー:", e);
+                        }
+                    }
+
+                    controls.update();
+                    renderer.render(scene, camera);
+                }
+
+                window.addEventListener('resize', () => {
+                    camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+                    camera.updateProjectionMatrix();
+                    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                    renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+                });
+
+                renderLoop();
+
+            } catch (error) {
+                showError("起動エラー", `${error.message || error}\n\nStack:\n${error.stack || '(no stack)'}`);
+                console.error(error);
+            }
+        }
+
+        main();
+    </script>
 </body>
 </html>
