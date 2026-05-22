@@ -168,10 +168,10 @@
                 dirLight.position.set(3, 6, 3);
                 dirLight.castShadow = true;
                 dirLight.shadow.mapSize.set(1024, 1024);
-                dirLight.shadow.camera.left = -3;
-                dirLight.shadow.camera.right = 3;
-                dirLight.shadow.camera.top = 4;
-                dirLight.shadow.camera.bottom = -1;
+                dirLight.shadow.camera.left = -5;
+                dirLight.shadow.camera.right = 5;
+                dirLight.shadow.camera.top = 5;
+                dirLight.shadow.camera.bottom = -2;
                 scene.add(dirLight);
                 const rim = new THREE.DirectionalLight(0x88aaff, 0.4);
                 rim.position.set(-3, 2, -3);
@@ -247,18 +247,7 @@
 
                 avatar.updateMatrixWorld(true);
 
-                // ★ Hips のバインド時ローカル位置を記録（足が床にくっつく基準位置）
                 const bindHipsLocalPos = B.hips.position.clone();
-                console.log("[INFO] Hipsバインド位置:", bindHipsLocalPos);
-
-                // 参考：Hips ワールド位置（足の接地確認用）
-                const _hipsWorldPos = new THREE.Vector3();
-                B.hips.getWorldPosition(_hipsWorldPos);
-                console.log("[INFO] Hipsワールド位置:", _hipsWorldPos);
-
-                const _footWorldPos = new THREE.Vector3();
-                B.lFoot.getWorldPosition(_footWorldPos);
-                console.log("[INFO] LeftFootワールド位置:", _footWorldPos);
 
                 const _vA = new THREE.Vector3();
                 const _vB = new THREE.Vector3();
@@ -350,14 +339,31 @@
                     video.play().catch(err => console.warn('再生開始に失敗:', err));
                     firstFrame = true;
                     lastVideoTime = -1;
+                    // 移動の基準を新しい動画でリセット
+                    baselineSet = false;
                 });
 
                 const lm = new Array(33).fill(null).map(() => new THREE.Vector3());
                 const lmRaw = new Array(33).fill(null).map(() => new THREE.Vector3());
                 let firstFrame = true;
                 const SMOOTH = 0.4;
-                // ★ 水平移動の表示倍率（被写体の動きをモデルにどれくらい反映するか）
-                const HORIZONTAL_SCALE = 1.0;
+
+                // ===== 移動関連の設定 =====
+                // 画像座標(0〜1)からワールド座標へのスケール
+                const HORIZONTAL_SCALE = 4.0;  // 左右の移動量倍率（大きいほど広く動く）
+                const VERTICAL_SCALE   = 4.0;  // 上下の移動量倍率（ジャンプ高さなど）
+                const DEPTH_SCALE      = 1.0;  // 奥行き
+                // 移動のスムージング（位置は別途強めにかける）
+                const POS_SMOOTH = 0.25;
+                // モード: 'ground' = 常に足を接地, 'free' = 初期位置基準の自由移動
+                const MOVE_MODE = 'free';  // 'ground' or 'free'
+
+                // 画像座標系の腰中点（基準）
+                let baselineSet = false;
+                let baseImgX = 0, baseImgY = 0, baseWorldZ = 0;
+                // 現在の目標位置（スムージング前）
+                const targetHipPos = new THREE.Vector3();
+                const currentHipPos = new THREE.Vector3();
 
                 const _qDelta = new THREE.Quaternion();
                 const _qTargetWorld = new THREE.Quaternion();
@@ -399,9 +405,13 @@
 
                         try {
                             const results = poseLandmarker.detectForVideo(video, lastTs);
-                            if (results.worldLandmarks && results.worldLandmarks.length > 0) {
-                                const w = results.worldLandmarks[0];
+                            if (results.worldLandmarks && results.worldLandmarks.length > 0
+                                && results.landmarks && results.landmarks.length > 0) {
 
+                                const w = results.worldLandmarks[0];   // 実寸ローカル
+                                const img = results.landmarks[0];      // 画像内正規化 0〜1
+
+                                // 姿勢計算用（worldLandmarks）
                                 for (let i = 0; i < 33; i++) {
                                     lmRaw[i].set(w[i].x, -w[i].y, -w[i].z);
                                 }
@@ -412,15 +422,48 @@
                                     for (let i = 0; i < 33; i++) lm[i].lerp(lmRaw[i], SMOOTH);
                                 }
 
-                                // ===== Hips の位置 =====
-                                // モデルのバインド位置を基準に、被写体の水平移動だけ反映
-                                // Y はバインド値固定（足が床にくっつくモデル本来の高さ）
-                                tmpHipMid.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
-                                B.hips.position.x = bindHipsLocalPos.x + tmpHipMid.x * HORIZONTAL_SCALE;
-                                B.hips.position.y = bindHipsLocalPos.y;
-                                B.hips.position.z = bindHipsLocalPos.z + tmpHipMid.z * HORIZONTAL_SCALE;
+                                // ===== 移動計算 =====
+                                // 画像内の腰中点（左右=X 0〜1, 上下=Y 0〜1, Y は下が大きい）
+                                const imgHipX = (img[23].x + img[24].x) * 0.5;
+                                const imgHipY = (img[23].y + img[24].y) * 0.5;
+                                // 奥行き（worldLandmarks の z はカメラから遠いほど大きい / 近いほど小さい、符号注意）
+                                const worldHipZ = (w[23].z + w[24].z) * 0.5;
+
+                                if (!baselineSet) {
+                                    baseImgX = imgHipX;
+                                    baseImgY = imgHipY;
+                                    baseWorldZ = worldHipZ;
+                                    baselineSet = true;
+                                }
+
+                                // 基準からの差分をワールド座標に展開
+                                // 画像のXは右へ大きく → ワールドのXも右へ大きく
+                                // 画像のYは下へ大きく → ワールドのYは上へ大きく（符号反転）
+                                const dx = (imgHipX - baseImgX) * HORIZONTAL_SCALE;
+                                const dy = -(imgHipY - baseImgY) * VERTICAL_SCALE;
+                                const dz = (worldHipZ - baseWorldZ) * DEPTH_SCALE;
+
+                                targetHipPos.set(
+                                    bindHipsLocalPos.x + dx,
+                                    bindHipsLocalPos.y + dy,
+                                    bindHipsLocalPos.z - dz  // カメラに近づく(z負)とモデルは手前(Z+)へ
+                                );
+
+                                // 接地モード: 足が床より上にしか行かないよう Y クランプ
+                                if (MOVE_MODE === 'ground') {
+                                    targetHipPos.y = Math.max(targetHipPos.y, bindHipsLocalPos.y);
+                                }
+
+                                // 位置スムージング
+                                if (currentHipPos.lengthSq() === 0) {
+                                    currentHipPos.copy(targetHipPos);
+                                } else {
+                                    currentHipPos.lerp(targetHipPos, POS_SMOOTH);
+                                }
+                                B.hips.position.copy(currentHipPos);
 
                                 // ===== Hips の回転 =====
+                                tmpHipMid.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
                                 tmpHipRight.subVectors(lm[23], lm[24]).normalize();
                                 tmpShoulderMid.addVectors(lm[11], lm[12]).multiplyScalar(0.5);
                                 tmpUp.subVectors(tmpShoulderMid, tmpHipMid).normalize();
