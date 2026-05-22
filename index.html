@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web 3D Motion Capture</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #121212; }
+        /* スクロールバーの非表示など */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+    </style>
+    <!-- ES Moduleのインポートマップ -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body class="text-gray-200 h-screen flex flex-col font-sans">
+
+    <!-- ヘッダー -->
+    <header class="p-4 bg-[#1e1e1e] border-b border-[#333] flex justify-between items-center z-10 shadow-md">
+        <div>
+            <h1 class="text-xl font-bold tracking-wider text-blue-400">3D MOTION AI</h1>
+            <p class="text-xs text-gray-400 mt-1">MediaPipe × Three.js ブラウザ完結型モーションキャプチャ</p>
+        </div>
+        <div class="flex items-center gap-4">
+            <input type="file" id="video-upload" accept="video/mp4,video/mov,video/webm" class="hidden">
+            <button id="upload-btn" disabled class="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 px-5 py-2 rounded-full font-semibold transition-colors flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                動画を選択
+            </button>
+        </div>
+    </header>
+    
+    <!-- メインコンテンツ領域 -->
+    <div class="flex-1 flex flex-col md:flex-row p-2 md:p-4 gap-4 overflow-hidden bg-[#0a0a0a]">
+        
+        <!-- 左側：動画プレーヤー -->
+        <div class="flex-1 bg-black rounded-xl border border-[#333] relative overflow-hidden flex justify-center items-center shadow-lg">
+            <video id="input-video" class="max-h-full max-w-full object-contain" controls loop playsinline></video>
+            
+            <!-- 初期のプレースホルダーとローディング -->
+            <div id="overlay" class="absolute inset-0 bg-[#111] bg-opacity-90 flex flex-col items-center justify-center z-10 transition-opacity duration-500">
+                <div id="spinner" class="animate-spin rounded-full h-12 w-12 border-4 border-gray-600 border-t-blue-500 mb-4"></div>
+                <p id="status-text" class="text-lg font-medium tracking-wide">AIモデルを読み込み中...</p>
+                <p id="sub-status" class="text-sm text-gray-400 mt-2">しばらくお待ちください</p>
+            </div>
+        </div>
+
+        <!-- 右側：3D描画キャンバス -->
+        <div id="canvas-container" class="flex-1 bg-[#1a1a1a] rounded-xl border border-[#333] relative overflow-hidden shadow-lg cursor-move">
+            <!-- Three.jsのCanvasがここに挿入されます -->
+            <div class="absolute bottom-3 right-3 bg-black/60 backdrop-blur px-3 py-1.5 text-xs text-gray-300 rounded border border-gray-700 select-none">
+                ドラッグ: 回転 | スクロール: 拡大縮小
+            </div>
+        </div>
+
+    </div>
+
+    <!-- アプリケーションのロジック -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+
+        // DOM要素
+        const video = document.getElementById('input-video');
+        const canvasContainer = document.getElementById('canvas-container');
+        const uploadBtn = document.getElementById('upload-btn');
+        const videoUpload = document.getElementById('video-upload');
+        const overlay = document.getElementById('overlay');
+        const spinner = document.getElementById('spinner');
+        const statusText = document.getElementById('status-text');
+        const subStatus = document.getElementById('sub-status');
+
+        let poseLandmarker = null;
+
+        // ==========================================
+        // 1. Three.js のセットアップ (3D空間の構築)
+        // ==========================================
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a);
+        scene.fog = new THREE.Fog(0x1a1a1a, 3, 15); // 奥行きを出すためのフォグ
+
+        const camera = new THREE.PerspectiveCamera(45, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 100);
+        camera.position.set(0, 1.2, 4.5); // カメラの初期位置
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true; // 影を有効化
+        canvasContainer.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(0, 0.5, 0); // 注視点
+
+        // 照明の設定
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(2, 5, 3);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
+
+        // 空間の装飾 (床とグリッド)
+        const planeGeo = new THREE.PlaneGeometry(20, 20);
+        const planeMat = new THREE.MeshStandardMaterial({ 
+            color: 0x333333, 
+            roughness: 0.8, 
+            metalness: 0.2 
+        });
+        const plane = new THREE.Mesh(planeGeo, planeMat);
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.y = -0.5; // 床の高さを少し下げる
+        plane.receiveShadow = true;
+        scene.add(plane);
+
+        const grid = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+        grid.position.y = -0.49;
+        scene.add(grid);
+
+        // ==========================================
+        // 2. 骨格モデル (関節と骨) の生成
+        // ==========================================
+        const joints = [];
+        const bones = [];
+        const skeletonGroup = new THREE.Group();
+        scene.add(skeletonGroup);
+
+        // 関節(球体)のジオメトリとマテリアル
+        const jointGeo = new THREE.SphereGeometry(0.04, 16, 16);
+        const defaultJointMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.4 });
+        const highlightJointMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, roughness: 0.4 }); // 青系のハイライト
+
+        // MediaPipeは33個のランドマークを出力する
+        for (let i = 0; i < 33; i++) {
+            // 肩や腰など主要な関節だけ色を変える
+            const mat = [11, 12, 23, 24].includes(i) ? highlightJointMat : defaultJointMat;
+            const sphere = new THREE.Mesh(jointGeo, mat);
+            sphere.castShadow = true;
+            skeletonGroup.add(sphere);
+            joints.push(sphere);
+        }
+
+        // 関節同士を繋ぐ線(骨)の定義
+        const POSE_CONNECTIONS = [
+            // 頭部・顔
+            [0, 1], [1, 2], [2, 3], [3, 7], [0, 4], [4, 5], [5, 6], [6, 8], [9, 10],
+            // 胴体
+            [11, 12], [11, 23], [12, 24], [23, 24],
+            // 腕
+            [11, 13], [13, 15], [15, 17], [15, 19], [15, 21], [17, 19], // 左腕
+            [12, 14], [14, 16], [16, 18], [16, 20], [16, 22], [18, 20], // 右腕
+            // 脚
+            [23, 25], [25, 27], [27, 29], [27, 31], [31, 29], // 左脚
+            [24, 26], [26, 28], [28, 30], [28, 32], [32, 30]  // 右脚
+        ];
+
+        // 線のマテリアル（画像のように赤と青を取り入れる）
+        const boneMat = new THREE.LineBasicMaterial({ color: 0xaaaaaa, linewidth: 2 });
+        const spineMatRed = new THREE.LineBasicMaterial({ color: 0xef4444, linewidth: 3 });
+        const spineMatBlue = new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 3 });
+
+        POSE_CONNECTIONS.forEach((conn) => {
+            let mat = boneMat;
+            // 胴体の中心部分を装飾
+            if (conn[0] === 11 && conn[1] === 23) mat = spineMatRed;  // 左胴体
+            if (conn[0] === 12 && conn[1] === 24) mat = spineMatBlue; // 右胴体
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+            const line = new THREE.Line(geometry, mat);
+            skeletonGroup.add(line);
+            bones.push(line);
+        });
+
+        // ==========================================
+        // 3. AI (MediaPipe PoseLandmarker) の初期化
+        // ==========================================
+        async function initMediaPipe() {
+            try {
+                // WASMバイナリの取得
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+                );
+                
+                // 推論モデルの生成 (軽量版のliteを使用)
+                poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+                        delegate: "GPU" // 可能ならGPUアクセラレーションを使用
+                    },
+                    runningMode: "VIDEO", // 動画解析モード
+                    numPoses: 1
+                });
+                
+                // UIの更新
+                spinner.classList.add('hidden');
+                statusText.innerText = "準備完了";
+                subStatus.innerText = "右上のボタンから動画を選択してください";
+                uploadBtn.disabled = false;
+                
+            } catch (error) {
+                spinner.classList.add('hidden');
+                statusText.innerText = "エラーが発生しました";
+                statusText.classList.add('text-red-500');
+                subStatus.innerText = error.message;
+                console.error(error);
+            }
+        }
+        
+        initMediaPipe();
+
+        // ==========================================
+        // 4. イベントリスナーと描画ループ
+        // ==========================================
+        
+        // 動画アップロード処理
+        uploadBtn.addEventListener('click', () => videoUpload.click());
+
+        videoUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            // オーバーレイを非表示にする
+            overlay.style.opacity = '0';
+            setTimeout(() => overlay.classList.add('hidden'), 500);
+
+            // 既存のURLがあれば解放
+            if (video.src) URL.revokeObjectURL(video.src);
+            
+            video.src = URL.createObjectURL(file);
+            video.load();
+            video.play();
+        });
+
+        let lastVideoTime = -1;
+
+        // メインの描画・推論ループ
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
+
+            // 動画が再生されており、時間が進んでいる場合のみAI推論を実行
+            if (video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime && poseLandmarker) {
+                lastVideoTime = video.currentTime;
+                
+                // 現在の動画フレームをAIに渡す
+                const startTimeMs = performance.now();
+                const results = poseLandmarker.detectForVideo(video, startTimeMs);
+
+                // 3D空間座標 (worldLandmarks) が検出された場合
+                if (results.worldLandmarks && results.worldLandmarks.length > 0) {
+                    const landmarks = results.worldLandmarks[0];
+                    
+                    // 3D空間の中心高さを調整するオフセット
+                    const offsetY = 0.8;
+                    const scale = 1.3;
+
+                    // 関節(球体)の位置を更新
+                    landmarks.forEach((lm, i) => {
+                        // MediaPipe座標系 -> Three.js座標系への変換
+                        // X軸を反転させることで、画面の動きとミラーリングさせる
+                        joints[i].position.set(
+                            -lm.x * scale,           // X軸 (左右反転)
+                            -lm.y * scale + offsetY, // Y軸 (上下反転)
+                            -lm.z * scale            // Z軸 (奥行き反転)
+                        );
+                    });
+
+                    // 骨(線)の頂点座標を更新
+                    POSE_CONNECTIONS.forEach((conn, i) => {
+                        const p1 = joints[conn[0]].position;
+                        const p2 = joints[conn[1]].position;
+                        const positions = bones[i].geometry.attributes.position.array;
+                        
+                        positions[0] = p1.x; positions[1] = p1.y; positions[2] = p1.z;
+                        positions[3] = p2.x; positions[4] = p2.y; positions[5] = p2.z;
+                        
+                        bones[i].geometry.attributes.position.needsUpdate = true;
+                    });
+                }
+            }
+
+            // カメラコントロールの更新とレンダリング
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // リサイズ時のキャンバスサイズ調整
+        window.addEventListener('resize', () => {
+            camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        });
+
+        // ループ開始
+        renderLoop();
+
+    </script>
+</body>
+</html>
