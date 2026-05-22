@@ -9,8 +9,7 @@
         {
             "imports": {
                 "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/",
-                "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs"
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
             }
         }
     </script>
@@ -36,7 +35,7 @@
             
             <div id="overlay" class="absolute inset-0 bg-[#111] bg-opacity-95 flex flex-col items-center justify-center z-10 transition-opacity duration-500 p-6 text-center">
                 <div id="spinner" class="animate-spin rounded-full h-10 w-10 border-4 border-gray-600 border-t-blue-500 mb-4"></div>
-                <p id="status-text" class="text-base md:text-lg font-medium tracking-wide">AIの準備をしています...</p>
+                <p id="status-text" class="text-base md:text-lg font-medium tracking-wide">起動中...</p>
                 <p id="sub-status" class="text-xs md:text-sm text-gray-400 mt-2 mb-4">しばらくお待ちください</p>
                 
                 <div id="progress-container" class="w-full max-w-xs hidden">
@@ -46,7 +45,7 @@
                     <p id="progress-text" class="text-sm font-bold text-blue-400">0%</p>
                 </div>
 
-                <div id="error-box" class="hidden mt-4 p-3 bg-red-900/40 border border-red-500/50 rounded text-red-200 text-xs text-left w-full max-w-sm break-all overflow-y-auto max-h-32"></div>
+                <div id="error-box" class="hidden mt-4 p-3 bg-red-900/40 border border-red-500/50 rounded text-red-200 text-xs text-left w-full max-w-md break-all overflow-y-auto max-h-48 whitespace-pre-wrap"></div>
             </div>
         </div>
 
@@ -72,25 +71,36 @@
         const progressText = document.getElementById('progress-text');
         const errorBox = document.getElementById('error-box');
 
+        // ステップ表示用（どこまで進んだかを画面でも追える）
+        let currentStep = "init";
+        function setStep(label, sub = "") {
+            currentStep = label;
+            statusText.innerText = label;
+            if (sub) subStatus.innerText = sub;
+            console.log("[STEP]", label, sub);
+        }
+
         function showError(msg, details = "") {
             spinner.classList.add('hidden');
             progressContainer.classList.add('hidden');
             statusText.innerText = msg;
             statusText.classList.add('text-red-400');
-            subStatus.innerText = "通信環境を確認してページを再読み込みしてください。";
-            if (details) {
-                errorBox.classList.remove('hidden');
-                errorBox.innerText = details;
-            }
+            subStatus.innerText = `直前ステップ: ${currentStep}`;
+            errorBox.classList.remove('hidden');
+            errorBox.innerText = details || "(詳細なし)";
         }
-        window.onerror = (m) => showError("予期せぬエラーが発生しました", `${m}`);
+
+        window.onerror = (m, src, ln, col, err) => {
+            showError("予期せぬエラー", `${m}\n${src}:${ln}:${col}\n${err && err.stack ? err.stack : ''}`);
+        };
         window.addEventListener('unhandledrejection', (e) => {
-            showError("予期せぬエラーが発生しました", `${e.reason && e.reason.message ? e.reason.message : e.reason}`);
+            const r = e.reason;
+            showError("非同期エラー", `${r && r.message ? r.message : r}\n${r && r.stack ? r.stack : ''}`);
         });
 
         async function fetchWithProgress(url, onProgress) {
             const response = await fetch(url);
-            if (!response.ok) throw new Error(`ダウンロード失敗: HTTP ${response.status}`);
+            if (!response.ok) throw new Error(`ダウンロード失敗: HTTP ${response.status} (${url})`);
             const contentLength = response.headers.get('content-length');
             const total = contentLength ? parseInt(contentLength, 10) : 0;
             let loaded = 0;
@@ -112,18 +122,27 @@
 
         async function main() {
             try {
-                // ====== 1. ライブラリ ======
-                statusText.innerText = "手順(1/5): プログラムを取得中...";
-                subStatus.innerText = "3DとAIのライブラリを読み込んでいます";
-
+                // ====== 1a. three 読み込み ======
+                setStep("手順(1/6): three.js を読み込み中...", "3Dライブラリを取得しています");
                 const THREE = await import('three');
+
+                // ====== 1b. OrbitControls / GLTFLoader ======
+                setStep("手順(2/6): three アドオン読み込み中...", "OrbitControls / GLTFLoader");
                 const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
                 const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-                const { PoseLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
+
+                // ====== 1c. MediaPipe ======
+                setStep("手順(3/6): MediaPipe を読み込み中...", "AIエンジンを取得しています");
+                // ESM 版を直接 URL 指定（importmap を経由しない方が確実）
+                const mp = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs');
+                const PoseLandmarker = mp.PoseLandmarker;
+                const FilesetResolver = mp.FilesetResolver;
+                if (!PoseLandmarker || !FilesetResolver) {
+                    throw new Error("MediaPipe のエクスポートが見つかりません。\nexports: " + Object.keys(mp).join(', '));
+                }
 
                 // ====== 2. 3D空間 ======
-                statusText.innerText = "手順(2/5): 3D空間を準備中...";
-                subStatus.innerText = "キャンバスを構築しています";
+                setStep("手順(4/6): 3D空間を準備中...", "キャンバスを構築しています");
 
                 const scene = new THREE.Scene();
                 scene.background = new THREE.Color(0x1a1a1a);
@@ -166,14 +185,16 @@
                 grid.position.y = 0.01;
                 scene.add(grid);
 
-                // ====== 3. GLTFアバター読み込み ======
-                statusText.innerText = "手順(3/5): キャラクターモデル読み込み中...";
-                subStatus.innerText = "Xbot（Mixamo由来）を取得しています";
+                // ====== 3. GLTFアバター ======
+                setStep("手順(5/6): キャラクターモデル読み込み中...", "Xbot を取得しています");
+
+                // jsdelivr 経由（CORS 安全）
+                const XBOT_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r158/examples/models/gltf/Xbot.glb';
 
                 const gltfLoader = new GLTFLoader();
                 const gltf = await new Promise((resolve, reject) => {
                     gltfLoader.load(
-                        'https://threejs.org/examples/models/gltf/Xbot.glb',
+                        XBOT_URL,
                         resolve,
                         (xhr) => {
                             if (xhr.lengthComputable) {
@@ -181,7 +202,7 @@
                                 subStatus.innerText = `モデル取得中: ${pct}%`;
                             }
                         },
-                        reject
+                        (err) => reject(new Error(`GLTF読み込み失敗: ${err && err.message ? err.message : err}`))
                     );
                 });
 
@@ -190,7 +211,6 @@
                     if (obj.isMesh) {
                         obj.castShadow = true;
                         obj.receiveShadow = true;
-                        // バインドポーズを使うため、frustumCulling 無効化（スケルトンが動くと境界が変わる）
                         obj.frustumCulled = false;
                     }
                 });
@@ -201,8 +221,8 @@
                 avatar.traverse(o => {
                     if (o.isBone) bones[o.name] = o;
                 });
+                console.log("ボーン一覧:", Object.keys(bones));
 
-                // 必要なボーン名（Xbot / Mixamo 規約）
                 const B = {
                     hips:        bones['mixamorigHips'],
                     spine:       bones['mixamorigSpine'],
@@ -226,14 +246,10 @@
                     rFoot:       bones['mixamorigRightFoot'],
                 };
 
-                // ボーンが見つからない場合の保険
                 if (!B.hips) {
-                    console.warn("ボーン一覧:", Object.keys(bones));
-                    throw new Error("Hipsボーンが見つかりません。モデル構造を確認してください。");
+                    throw new Error("Hips ボーンが見つかりません。\nボーン一覧: " + Object.keys(bones).join(', '));
                 }
 
-                // ====== バインドポーズの「子方向ベクトル」を記録 ======
-                // 各ボーンの「自分の位置 → 子ボーンの位置」をワールド空間で取得
                 avatar.updateMatrixWorld(true);
 
                 function worldDir(boneFrom, boneTo) {
@@ -244,9 +260,7 @@
                     return b.sub(a).normalize();
                 }
 
-                // バインド時のワールド方向
                 const bindDir = {
-                    spine:     worldDir(B.hips, B.spine),
                     lArm:      worldDir(B.lArm, B.lForeArm),
                     lForeArm:  worldDir(B.lForeArm, B.lHand),
                     rArm:      worldDir(B.rArm, B.rForeArm),
@@ -257,7 +271,6 @@
                     rLeg:      worldDir(B.rLeg, B.rFoot),
                 };
 
-                // バインド時のワールドクォータニオン
                 const bindWorldQuat = {};
                 for (const key of Object.keys(B)) {
                     if (!B[key]) continue;
@@ -265,16 +278,13 @@
                     B[key].getWorldQuaternion(bindWorldQuat[key]);
                 }
 
-                // ====== 4. AIエンジン ======
-                statusText.innerText = "手順(4/5): AIエンジンを準備中...";
-                subStatus.innerText = "ブラウザの環境を整えています";
+                // ====== 4. AI セットアップ ======
+                setStep("手順(6/6): AIエンジン初期化中...", "WASM環境を整えています");
                 const vision = await FilesetResolver.forVisionTasks(
                     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
                 );
 
-                // ====== 5. AIモデルDL ======
-                statusText.innerText = "手順(5/5): AIモデルをダウンロード中...";
-                subStatus.innerText = "約7MBのデータを取得します";
+                setStep("AIモデルをダウンロード中...", "約7MBのデータを取得します");
                 progressContainer.classList.remove('hidden');
 
                 const modelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
@@ -288,9 +298,9 @@
                         progressBar.classList.add('animate-pulse');
                     }
                 });
+
                 progressContainer.classList.add('hidden');
-                statusText.innerText = "最終調整中...";
-                subStatus.innerText = "モデルを起動しています";
+                setStep("最終調整中...", "モデルを起動しています");
 
                 const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
                     baseOptions: { modelAssetBuffer: modelBuffer, delegate: "GPU" },
@@ -321,17 +331,12 @@
                     lastTs = -1;
                 });
 
-                // ====== 姿勢適用ロジック ======
-
-                // MediaPipe ランドマーク格納用（スムージング後）
+                // ====== 姿勢適用 ======
                 const lm = new Array(33).fill(null).map(() => new THREE.Vector3());
                 const lmRaw = new Array(33).fill(null).map(() => new THREE.Vector3());
                 let firstFrame = true;
                 const SMOOTH = 0.4;
 
-                // ボーン回転計算ヘルパー
-                // バインド時のワールド方向 → 現在のワールド方向 への回転を求め、
-                // それをバインド時のワールドクォータニオンに合成し、親のワールド逆を掛けてローカルに戻す
                 const _qDelta = new THREE.Quaternion();
                 const _qTargetWorld = new THREE.Quaternion();
                 const _qParentWorld = new THREE.Quaternion();
@@ -340,11 +345,8 @@
                 function applyBoneByDirection(bone, bindDirVec, currentDirVec, bindWorldQ) {
                     if (!bone || currentDirVec.lengthSq() < 1e-8) return;
                     currentDirVec.normalize();
-                    // バインド方向→現在方向 のワールド回転差分
                     _qDelta.setFromUnitVectors(bindDirVec, currentDirVec);
-                    // 現在のワールド回転 = delta * bindWorld
                     _qTargetWorld.multiplyQuaternions(_qDelta, bindWorldQ);
-                    // 親のワールド回転
                     if (bone.parent && bone.parent.isBone) {
                         bone.parent.getWorldQuaternion(_qParentWorld);
                         _qParentInv.copy(_qParentWorld).invert();
@@ -354,15 +356,10 @@
                     }
                 }
 
-                // ====== 描画ループ ======
                 let lastVideoTime = -1;
                 let lastTs = -1;
                 const tmpA = new THREE.Vector3();
-                const tmpB = new THREE.Vector3();
-                const tmpC = new THREE.Vector3();
-
-                // ルート位置の基準（初期）
-                const ROOT_Y_OFFSET = 1.0; // モデルの高さに合わせて
+                const ROOT_Y_OFFSET = 1.0;
 
                 function renderLoop() {
                     requestAnimationFrame(renderLoop);
@@ -377,13 +374,9 @@
                             const results = poseLandmarker.detectForVideo(video, ts);
                             if (results.worldLandmarks && results.worldLandmarks.length > 0) {
                                 const w = results.worldLandmarks[0];
-
-                                // 座標変換: MediaPipe (X右, Y下, Z前) → Three.js (X右, Y上, Z後ろ)
                                 for (let i = 0; i < 33; i++) {
                                     lmRaw[i].set(w[i].x, -w[i].y, -w[i].z);
                                 }
-
-                                // スムージング
                                 if (firstFrame) {
                                     for (let i = 0; i < 33; i++) lm[i].copy(lmRaw[i]);
                                     firstFrame = false;
@@ -391,11 +384,12 @@
                                     for (let i = 0; i < 33; i++) lm[i].lerp(lmRaw[i], SMOOTH);
                                 }
 
-                                // --- ヒップのワールド位置 ---
-                                // 左右腰の中点（lm[23], lm[24]）
-                                tmpA.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
-                                // worldLandmarks は腰中心が原点なので、tmpA はほぼ (0,0,0) 近辺
-                                // モデルの足が地面につくよう Y オフセット
-                                B.hips.position.set(tmpA.x, tmpA.y + ROOT_Y_OFFSET, tmpA.z);
+                                // Hips 位置
+                                const hipMid = new THREE.Vector3().addVectors(lm[23], lm[24]).multiplyScalar(0.5);
+                                B.hips.position.set(hipMid.x, hipMid.y + ROOT_Y_OFFSET, hipMid.z);
 
-                    
+                                // Hips 回転（胴体の向き）
+                                const hipRight = new THREE.Vector3().subVectors(lm[23], lm[24]).normalize();
+                                const shoulderMid = new THREE.Vector3().addVectors(lm[11], lm[12]).multiplyScalar(0.5);
+                                const upVec = new THREE.Vector3().subVectors(shoulderMid, hipMid).normalize();
+                                const fwdVec = new THREE.Vector3(
