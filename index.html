@@ -383,4 +383,243 @@
                     overlay.style.opacity = '0';
                     setTimeout(() => overlay.classList.add('hidden'), 500);
                     if (video.src) URL.revokeObjectURL(video.src);
-                    video.src = URL.createObjec
+                    video.src = URL.createObjectURL(file);
+                    video.load();
+                    video.play().catch(err => console.warn('再生開始に失敗:', err));
+                    firstFrame = true; lastVideoTime = -1; baselineSet = false; posInited = false;
+                });
+
+                // ===== 移動関連 =====
+                const HORIZONTAL_SCALE = 5.0;
+                const DEPTH_SCALE      = 1.5;
+                const POSE_SMOOTH = 0.4;
+                const POS_SMOOTH = 0.15;
+
+                const lm = new Array(33).fill(null).map(() => new THREE.Vector3());
+                const lmRaw = new Array(33).fill(null).map(() => new THREE.Vector3());
+                let firstFrame = true;
+                let baselineSet = false;
+                let baseImgX = 0, baseWorldZ = 0;
+                const targetHipPos = new THREE.Vector3();
+                const currentHipPos = new THREE.Vector3();
+                let posInited = false;
+
+                const _qDelta = new THREE.Quaternion();
+                const _qTargetWorld = new THREE.Quaternion();
+                const _qParentWorld = new THREE.Quaternion();
+                const _qParentInv = new THREE.Quaternion();
+
+                function applyBoneByDirection(bone, bindDirVec, currentDirVec, bindWorldQ) {
+                    if (!bone || currentDirVec.lengthSq() < 1e-8) return;
+                    currentDirVec.normalize();
+                    _qDelta.setFromUnitVectors(bindDirVec, currentDirVec);
+                    _qTargetWorld.multiplyQuaternions(_qDelta, bindWorldQ);
+                    if (bone.parent && bone.parent.isBone) {
+                        bone.parent.getWorldQuaternion(_qParentWorld);
+                        _qParentInv.copy(_qParentWorld).invert();
+                        bone.quaternion.copy(_qParentInv).multiply(_qTargetWorld);
+                    } else {
+                        bone.quaternion.copy(_qTargetWorld);
+                    }
+                }
+
+                let lastVideoTime = -1;
+                let lastTs = 0;
+                const tmpA = new THREE.Vector3();
+                const tmpHipRight = new THREE.Vector3();
+                const tmpHipMid = new THREE.Vector3();
+                const tmpShoulderMid = new THREE.Vector3();
+                const tmpUp = new THREE.Vector3();
+                const tmpFwd = new THREE.Vector3();
+                const tmpTrueUp = new THREE.Vector3();
+                const tmpMat = new THREE.Matrix4();
+                const tmpHipWorldQuat = new THREE.Quaternion();
+                const tmpFootL = new THREE.Vector3();
+                const tmpFootR = new THREE.Vector3();
+
+                function updatePose() {
+                    if (!(video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime && poseLandmarker)) return;
+                    lastVideoTime = video.currentTime;
+                    lastTs = Math.max(lastTs + 1, Math.round(performance.now()));
+
+                    try {
+                        const results = poseLandmarker.detectForVideo(video, lastTs);
+                        const hasImg = results.landmarks && results.landmarks.length > 0;
+                        const hasWorld = results.worldLandmarks && results.worldLandmarks.length > 0;
+                        if (!hasWorld) return;
+
+                        const w = results.worldLandmarks[0];
+                        for (let i = 0; i < 33; i++) {
+                            lmRaw[i].set(w[i].x, -w[i].y, -w[i].z);
+                        }
+                        if (firstFrame) {
+                            for (let i = 0; i < 33; i++) lm[i].copy(lmRaw[i]);
+                            firstFrame = false;
+                        } else {
+                            for (let i = 0; i < 33; i++) lm[i].lerp(lmRaw[i], POSE_SMOOTH);
+                        }
+
+                        // === 水平移動・奥行きだけ仮計算（Yはあとで決める）===
+                        let dx = 0, dz = 0;
+                        if (hasImg) {
+                            const img = results.landmarks[0];
+                            const imgHipX = (img[23].x + img[24].x) * 0.5;
+                            const worldHipZ = (w[23].z + w[24].z) * 0.5;
+                            if (!baselineSet) {
+                                baseImgX = imgHipX; baseWorldZ = worldHipZ;
+                                baselineSet = true;
+                            }
+                            dx = (imgHipX - baseImgX) * HORIZONTAL_SCALE;
+                            dz = -(worldHipZ - baseWorldZ) * DEPTH_SCALE;
+                        }
+
+                        // === 一旦 Hips を仮置き(Yはバインド値)→ ボーン姿勢を適用 ===
+                        B.hips.position.set(bindHipsLocalPos.x + dx, bindHipsLocalPos.y, bindHipsLocalPos.z + dz);
+
+                        // Hips 回転
+                        tmpHipMid.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
+                        tmpHipRight.subVectors(lm[23], lm[24]).normalize();
+                        tmpShoulderMid.addVectors(lm[11], lm[12]).multiplyScalar(0.5);
+                        tmpUp.subVectors(tmpShoulderMid, tmpHipMid).normalize();
+                        tmpFwd.crossVectors(tmpHipRight, tmpUp).normalize();
+                        tmpTrueUp.crossVectors(tmpFwd, tmpHipRight).normalize();
+                        tmpMat.makeBasis(tmpHipRight, tmpTrueUp, tmpFwd);
+                        tmpHipWorldQuat.setFromRotationMatrix(tmpMat);
+                        B.hips.quaternion.copy(tmpHipWorldQuat).multiply(bindHipsWorldQuatInv);
+
+                        avatar.updateMatrixWorld(true);
+
+                        // 四肢
+                        tmpA.subVectors(lm[13], lm[11]).normalize();
+                        applyBoneByDirection(B.lArm, bindDir.lArm, tmpA, bindWorldQuat.lArm);
+                        avatar.updateMatrixWorld(true);
+                        tmpA.subVectors(lm[15], lm[13]).normalize();
+                        applyBoneByDirection(B.lForeArm, bindDir.lForeArm, tmpA, bindWorldQuat.lForeArm);
+
+                        tmpA.subVectors(lm[14], lm[12]).normalize();
+                        applyBoneByDirection(B.rArm, bindDir.rArm, tmpA, bindWorldQuat.rArm);
+                        avatar.updateMatrixWorld(true);
+                        tmpA.subVectors(lm[16], lm[14]).normalize();
+                        applyBoneByDirection(B.rForeArm, bindDir.rForeArm, tmpA, bindWorldQuat.rForeArm);
+
+                        tmpA.subVectors(lm[25], lm[23]).normalize();
+                        applyBoneByDirection(B.lUpLeg, bindDir.lUpLeg, tmpA, bindWorldQuat.lUpLeg);
+                        avatar.updateMatrixWorld(true);
+                        tmpA.subVectors(lm[27], lm[25]).normalize();
+                        applyBoneByDirection(B.lLeg, bindDir.lLeg, tmpA, bindWorldQuat.lLeg);
+
+                        tmpA.subVectors(lm[26], lm[24]).normalize();
+                        applyBoneByDirection(B.rUpLeg, bindDir.rUpLeg, tmpA, bindWorldQuat.rUpLeg);
+                        avatar.updateMatrixWorld(true);
+                        tmpA.subVectors(lm[28], lm[26]).normalize();
+                        applyBoneByDirection(B.rLeg, bindDir.rLeg, tmpA, bindWorldQuat.rLeg);
+
+                        avatar.updateMatrixWorld(true);
+
+                        // === ★しゃがみ対応：足の最低点を Y=0 に合わせる Y オフセットを計算 ===
+                        B.lFoot.getWorldPosition(tmpFootL);
+                        B.rFoot.getWorldPosition(tmpFootR);
+                        const minFootY = Math.min(tmpFootL.y, tmpFootR.y);
+                        // 現在の Hips Y を minFootY 分だけ持ち上げる（minFootYがマイナスなら下に下げる）
+                        const newHipY = B.hips.position.y - minFootY;
+                        targetHipPos.set(B.hips.position.x, newHipY, B.hips.position.z);
+
+                        if (!posInited) {
+                            currentHipPos.copy(targetHipPos);
+                            posInited = true;
+                        } else {
+                            currentHipPos.lerp(targetHipPos, POS_SMOOTH);
+                        }
+                        B.hips.position.copy(currentHipPos);
+                        avatar.updateMatrixWorld(true);
+
+                        // === スティック更新（ボーン位置から取得して反映）===
+                        // worldLandmarks(lm)はそのまま腰中心座標 → Hipsのワールド位置にオフセット
+                        const hipWorldPos = new THREE.Vector3();
+                        B.hips.getWorldPosition(hipWorldPos);
+                        for (let i = 0; i < 33; i++) {
+                            // 顔の細かい点は非表示なので位置だけ仮セット
+                            stickJoints[i].position.set(
+                                hipWorldPos.x + lm[i].x,
+                                hipWorldPos.y + lm[i].y - (lm[23].y + lm[24].y) * 0.5,
+                                hipWorldPos.z + lm[i].z
+                            );
+                        }
+                        STICK_CONNECTIONS.forEach((conn, i) => {
+                            const p1 = stickJoints[conn[0]].position;
+                            const p2 = stickJoints[conn[1]].position;
+                            const arr = stickLines[i].geometry.attributes.position.array;
+                            arr[0]=p1.x; arr[1]=p1.y; arr[2]=p1.z;
+                            arr[3]=p2.x; arr[4]=p2.y; arr[5]=p2.z;
+                            stickLines[i].geometry.attributes.position.needsUpdate = true;
+                        });
+                    } catch (e) {
+                        console.error("推論エラー:", e);
+                    }
+                }
+
+                // ===== 4ビュー描画 =====
+                function setLabel(el, x, y, w, h) {
+                    el.style.left = (x + 6) + 'px';
+                    el.style.top = (y + 4) + 'px';
+                }
+                function renderView(cam, x, y, w, h) {
+                    renderer.setViewport(x, y, w, h);
+                    renderer.setScissor(x, y, w, h);
+                    if (cam.isOrthographicCamera) {
+                        // 直交カメラの aspect を保つ
+                    } else {
+                        cam.aspect = w / h;
+                        cam.updateProjectionMatrix();
+                    }
+                    renderer.render(scene, cam);
+                }
+
+                function renderLoop() {
+                    requestAnimationFrame(renderLoop);
+                    updatePose();
+                    controls.update();
+
+                    const W = canvasContainer.clientWidth;
+                    const H = canvasContainer.clientHeight;
+                    const halfW = Math.floor(W / 2);
+                    const halfH = Math.floor(H / 2);
+                    // CSS座標(原点=左上)とWebGL座標(原点=左下)を変換
+                    // 左上：Perspective, 右上：Front, 左下：Side, 右下：Top
+                    // WebGLでy=H-高さで指定
+                    renderer.setClearColor(0x1a1a1a, 1);
+                    renderer.clear();
+
+                    renderView(persCam,  0,          halfH,       halfW, halfH);  // 左上
+                    renderView(frontCam, halfW,      halfH,       halfW, halfH);  // 右上
+                    renderView(sideCam,  0,          0,           halfW, halfH);  // 左下
+                    renderView(topCam,   halfW,      0,           halfW, halfH);  // 右下
+
+                    // ラベル位置（CSS座標）
+                    labelPerspective.style.left = '6px';
+                    labelPerspective.style.top = '4px';
+                    labelFront.style.left = (halfW + 6) + 'px';
+                    labelFront.style.top = '4px';
+                    labelSide.style.left = '6px';
+                    labelSide.style.top = (halfH + 4) + 'px';
+                    labelTop.style.left = (halfW + 6) + 'px';
+                    labelTop.style.top = (halfH + 4) + 'px';
+                }
+
+                window.addEventListener('resize', () => {
+                    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                    renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+                });
+
+                renderLoop();
+
+            } catch (error) {
+                showError("起動エラー", `${error.message || error}\n\nStack:\n${error.stack || '(no stack)'}`);
+                console.error(error);
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
