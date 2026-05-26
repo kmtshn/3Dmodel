@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Web 3D Motion Capture - 走行・胴体・複数人対応版</title>
+<title>Web 3D Motion Capture - 安定版</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script type="importmap">
 {
@@ -43,9 +43,9 @@ body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:s
   <div class="flex gap-1 flex-shrink-0">
     <label class="text-xs text-gray-400">人数:</label>
     <select id="num-persons" class="btn">
-      <option value="1">1人</option>
+      <option value="1" selected>1人</option>
       <option value="2">2人</option>
-      <option value="3" selected>3人</option>
+      <option value="3">3人</option>
     </select>
   </div>
   <button id="reset-btn" class="btn flex-shrink-0">🔄 基準リセット</button>
@@ -105,18 +105,17 @@ document.getElementById('toggle-video-btn').addEventListener('click', () => {
 });
 
 // ===== パラメータ =====
-const POSE_SMOOTH      = 0.5;
+const POSE_SMOOTH      = 0.35;
 const POS_SMOOTH       = 0.25;
 const VISIBILITY_TH    = 0.5;
 const ORTHO_HALF_HEIGHT = 1.5;
 const ORTHO_CENTER_Y    = 0.9;
 const GROUND_OFFSET    = 0.02;
 const MIN_HIP_HEIGHT   = 0.3;
-// ★ 走行対応: 画像横幅を実世界何メートルにマップするか
-// 「画面に映る範囲が約 SCENE_WIDTH メートル」と仮定
-const SCENE_WIDTH      = 8.0;   // 横方向：画面全幅=8m
-const SCENE_DEPTH_RANGE = 6.0;  // 奥行きレンジ
+const SCENE_WIDTH      = 6.0;
+const REF_DISTANCE     = 4.0;
 const MAX_PERSONS      = 3;
+const PERSON_SPACING   = 1.2;
 
 async function main(){
   setStep('three.js 読み込み中...');
@@ -124,6 +123,7 @@ async function main(){
   setStep('アドオン読み込み中...');
   const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
   const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const { clone: skeletonClone } = await import('three/addons/utils/SkeletonUtils.js');
   setStep('MediaPipe 読み込み中...');
   const mp = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs');
   const { PoseLandmarker, FilesetResolver } = mp;
@@ -131,7 +131,7 @@ async function main(){
   setStep('3D空間構築中...');
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0f172a);
-  scene.fog = new THREE.Fog(0x0f172a, 10, 30);
+  scene.fog = new THREE.Fog(0x0f172a, 12, 35);
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.7));
   const dl = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -154,23 +154,26 @@ async function main(){
   renderer.shadowMap.enabled = true;
   renderer.setScissorTest(true);
 
+  // ★ カメラを引いて全体が見えるように
   const camPersp = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-  camPersp.position.set(4, 3, 6);
+  camPersp.position.set(5, 3.5, 7);
   camPersp.lookAt(0, 0.9, 0);
   const camFront = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
-  camFront.position.set(0, ORTHO_CENTER_Y, 8); camFront.lookAt(0, ORTHO_CENTER_Y, 0);
+  camFront.position.set(0, ORTHO_CENTER_Y, 10); camFront.lookAt(0, ORTHO_CENTER_Y, 0);
   const camSide = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
-  camSide.position.set(8, ORTHO_CENTER_Y, 0); camSide.lookAt(0, ORTHO_CENTER_Y, 0);
+  camSide.position.set(10, ORTHO_CENTER_Y, 0); camSide.lookAt(0, ORTHO_CENTER_Y, 0);
   const camTop = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
-  camTop.position.set(0, 12, 0); camTop.lookAt(0, 0, 0); camTop.up.set(0,0,-1);
+  camTop.position.set(0, 15, 0); camTop.lookAt(0, 0, 0); camTop.up.set(0,0,-1);
 
   const controls = new OrbitControls(camPersp, canvas);
   controls.target.set(0, 0.9, 0);
   controls.enableDamping = true;
+  controls.minDistance = 2;
+  controls.maxDistance = 30;
 
   function updateOrthoCam(cam, w, h){
     const aspect = w / Math.max(h, 1);
-    const halfH = ORTHO_HALF_HEIGHT * 2;  // 広めに
+    const halfH = ORTHO_HALF_HEIGHT * 1.5;
     const halfW = halfH * aspect;
     cam.left = -halfW; cam.right = halfW;
     cam.top = halfH; cam.bottom = -halfH;
@@ -183,7 +186,6 @@ async function main(){
     new GLTFLoader().load(XBOT_URL, resolve, undefined, err => reject(new Error('GLTF: '+err.message)));
   });
 
-  // ★ Person クラス：1人分のアバター+スティック+状態
   const PERSON_COLORS = [0xef4444, 0x3b82f6, 0x10b981];
   const STICK_BONES = [
     [11,13],[13,15],[12,14],[14,16],
@@ -191,33 +193,47 @@ async function main(){
     [23,25],[25,27],[27,31],
     [24,26],[26,28],[28,32],
   ];
-  const BIND_DIRS = {
-    lShoulder: new THREE.Vector3(1, 0, 0),
-    lElbow:    new THREE.Vector3(1, 0, 0),
-    rShoulder: new THREE.Vector3(-1, 0, 0),
-    rElbow:    new THREE.Vector3(-1, 0, 0),
-    lHip:      new THREE.Vector3(0, -1, 0),
-    lKnee:     new THREE.Vector3(0, -1, 0),
-    rHip:      new THREE.Vector3(0, -1, 0),
-    rKnee:     new THREE.Vector3(0, -1, 0),
-    // 胴体: 親(腰)→子(spine)はバインドポーズで +Y方向
-    spine:     new THREE.Vector3(0, 1, 0),
-    spine1:    new THREE.Vector3(0, 1, 0),
-    neck:      new THREE.Vector3(0, 1, 0),
-  };
+
+  // ★ Xbotのバインドポーズで各骨の「子へ向かう方向」をローカル座標で計測
+  function measureBindDirs(avatar){
+    avatar.updateMatrixWorld(true);
+    const bones = {};
+    avatar.traverse(o => { if(o.isBone) bones[o.name] = o; });
+    function localChildDir(parent, child){
+      if(!parent || !child) return new THREE.Vector3(0,1,0);
+      const pw = new THREE.Vector3(); parent.getWorldPosition(pw);
+      const cw = new THREE.Vector3(); child.getWorldPosition(cw);
+      const dirW = cw.sub(pw).normalize();
+      const pq = new THREE.Quaternion(); parent.getWorldQuaternion(pq);
+      return dirW.applyQuaternion(pq.invert()).normalize();
+    }
+    return {
+      lShoulder: localChildDir(bones.mixamorigLeftArm, bones.mixamorigLeftForeArm),
+      lElbow:    localChildDir(bones.mixamorigLeftForeArm, bones.mixamorigLeftHand),
+      rShoulder: localChildDir(bones.mixamorigRightArm, bones.mixamorigRightForeArm),
+      rElbow:    localChildDir(bones.mixamorigRightForeArm, bones.mixamorigRightHand),
+      lHip:      localChildDir(bones.mixamorigLeftUpLeg, bones.mixamorigLeftLeg),
+      lKnee:     localChildDir(bones.mixamorigLeftLeg, bones.mixamorigLeftFoot),
+      rHip:      localChildDir(bones.mixamorigRightUpLeg, bones.mixamorigRightLeg),
+      rKnee:     localChildDir(bones.mixamorigRightLeg, bones.mixamorigRightFoot),
+      spine:     localChildDir(bones.mixamorigSpine, bones.mixamorigSpine1),
+      spine1:    localChildDir(bones.mixamorigSpine1, bones.mixamorigSpine2),
+      neck:      localChildDir(bones.mixamorigNeck, bones.mixamorigHead),
+    };
+  }
 
   class Person {
-    constructor(id){
+    constructor(id, bindDirs){
       this.id = id;
       this.color = PERSON_COLORS[id % PERSON_COLORS.length];
-      // SkeletonUtils.clone は依存追加が必要なので、毎回ロードした gltf を使う
-      // 簡易策：scene を clone (アニメは無いので OK)
-      this.avatar = gltfTemplate.scene.clone(true);
+      this.bindDirs = bindDirs;
+
+      // ★ SkeletonUtils.clone でスキニングを正しく複製
+      this.avatar = skeletonClone(gltfTemplate.scene);
       this.avatar.traverse(o => {
         if(o.isMesh){
           o.castShadow = true;
           o.receiveShadow = true;
-          // 個別マテリアル化して色付け
           if(o.material){
             o.material = o.material.clone();
             if(o.material.color) o.material.color.setHex(this.color);
@@ -226,9 +242,8 @@ async function main(){
       });
       scene.add(this.avatar);
 
-      this.bones = {};
-      this.avatar.traverse(o => { if(o.isBone) this.bones[o.name] = o; });
-      const bn = this.bones;
+      const bn = {};
+      this.avatar.traverse(o => { if(o.isBone) bn[o.name] = o; });
       this.B = {
         hips: bn.mixamorigHips,
         spine: bn.mixamorigSpine,
@@ -248,17 +263,20 @@ async function main(){
         rAnkle: bn.mixamorigRightFoot,
       };
       this.bindHipsPos = this.B.hips.position.clone();
+      this.bindHipsQuat = this.B.hips.quaternion.clone();
+
+      // バインドポーズでの腰→足首距離(実測)
       this.avatar.updateMatrixWorld(true);
       const hp = new THREE.Vector3(); this.B.hips.getWorldPosition(hp);
       const ap = new THREE.Vector3(); this.B.lAnkle.getWorldPosition(ap);
-      this.xbotHipToFoot = hp.y - ap.y;
+      this.xbotHipToFoot = Math.abs(hp.y - ap.y);
 
       // スティック
       this.stickGroup = new THREE.Group();
       scene.add(this.stickGroup);
       this.joints = [];
       const jMat = new THREE.MeshStandardMaterial({color:this.color});
-      const jGeo = new THREE.SphereGeometry(0.025, 12, 12);
+      const jGeo = new THREE.SphereGeometry(0.03, 12, 12);
       for(let i=0;i<33;i++){
         const m = new THREE.Mesh(jGeo, jMat);
         m.castShadow = true;
@@ -266,25 +284,36 @@ async function main(){
       }
       const bMat = new THREE.MeshStandardMaterial({color:0x60a5fa});
       this.sticks = STICK_BONES.map(()=>{
-        const m = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,1,8), bMat);
+        const m = new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.015,1,8), bMat);
         m.castShadow = true; this.stickGroup.add(m); return m;
       });
 
-      // 状態
       this.smoothedHip = new THREE.Vector3();
+      this.smoothedHipQuat = new THREE.Quaternion();
       this.posInited = false;
       this.active = false;
-      this.lastPx = 0;  // トラッキング用
-      this.lastPy = 0;
+      this.lastPx = 0; this.lastPy = 0;
     }
     setVisible(showAvatar, showStick){
       this.avatar.visible = this.active && showAvatar;
       this.stickGroup.visible = this.active && showStick;
     }
+    resetPose(){
+      // バインドポーズに戻す
+      this.B.hips.quaternion.copy(this.bindHipsQuat);
+      this.B.hips.position.copy(this.bindHipsPos);
+    }
   }
 
+  // 一旦テンプレートからバインド方向を計測
+  const tempAvatar = skeletonClone(gltfTemplate.scene);
+  scene.add(tempAvatar);
+  const bindDirs = measureBindDirs(tempAvatar);
+  scene.remove(tempAvatar);
+  console.log('Bind dirs measured:', bindDirs);
+
   const persons = [];
-  for(let i=0;i<MAX_PERSONS;i++) persons.push(new Person(i));
+  for(let i=0;i<MAX_PERSONS;i++) persons.push(new Person(i, bindDirs));
 
   let viewMode = 'avatar';
   function refreshVisibility(){
@@ -306,7 +335,6 @@ async function main(){
   setStep('AIモデルダウンロード中...');
   progressContainer.classList.remove('hidden');
   const modelUrl = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
-  // ★ full モデル（精度高め）に変更。lite より重いが胴体・複数人検出が安定
   const res = await fetch(modelUrl);
   const reader = res.body.getReader();
   const total = parseInt(res.headers.get('content-length')||'12000000', 10);
@@ -324,7 +352,7 @@ async function main(){
   let numPosesWanted = parseInt(document.getElementById('num-persons').value, 10);
   let poseLandmarker;
   async function createPoseLandmarker(numPoses){
-    if(poseLandmarker){ poseLandmarker.close(); }
+    if(poseLandmarker){ try{ poseLandmarker.close(); }catch(e){} }
     try {
       poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
         baseOptions:{modelAssetBuffer:buf, delegate:'GPU'},
@@ -341,10 +369,10 @@ async function main(){
   document.getElementById('num-persons').addEventListener('change', async e => {
     numPosesWanted = parseInt(e.target.value, 10);
     setStep('検出器を再構築中...');
+    overlay.style.display = 'flex';
     await createPoseLandmarker(numPosesWanted);
     overlay.style.display = 'none';
-    // 全員リセット
-    persons.forEach(p => { p.active = false; p.posInited = false; });
+    persons.forEach(p => { p.active = false; p.posInited = false; p.resetPose(); });
     refreshVisibility();
   });
 
@@ -355,7 +383,7 @@ async function main(){
     const f = e.target.files[0]; if(!f) return;
     if(video.src) URL.revokeObjectURL(video.src);
     video.src = URL.createObjectURL(f);
-    persons.forEach(p => { p.active = false; p.posInited = false; });
+    persons.forEach(p => { p.active = false; p.posInited = false; p.resetPose(); });
     refreshVisibility();
     lastTs = 0; lastVideoTime = -1;
     baselineHeightPx = 0;
@@ -363,100 +391,106 @@ async function main(){
     footerInfo.innerText = `▶ 解析中: ${f.name}`;
   });
   document.getElementById('reset-btn').addEventListener('click', () => {
-    persons.forEach(p => { p.posInited = false; });
+    persons.forEach(p => { p.posInited = false; p.resetPose(); });
     baselineHeightPx = 0;
     footerInfo.innerText = '🔄 基準リセット完了';
   });
 
-  // ===== 姿勢適用ロジック =====
+  // ========== 姿勢適用ロジック（修正版） ==========
+  // MediaPipe → Three.js 座標
   function lmToVec3(lm, out){ out.set(lm.x, -lm.y, -lm.z); return out; }
 
+  // ★ 修正版: 親のワールド行列を「その都度更新」してから子の方向を計算
   function setBoneDirection(bone, dirWorld, bindDirLocal, smooth=POSE_SMOOTH){
     if(!bone || !bone.parent) return;
+    // 親の最新ワールド行列を強制更新
+    bone.parent.updateWorldMatrix(true, false);
     const parentQ = new THREE.Quaternion();
     bone.parent.getWorldQuaternion(parentQ);
-    const dirLocal = dirWorld.clone().applyQuaternion(parentQ.invert());
-    const q = new THREE.Quaternion().setFromUnitVectors(bindDirLocal, dirLocal.normalize());
+    const dirLocal = dirWorld.clone().applyQuaternion(parentQ.invert()).normalize();
+    // NaN ガード
+    if(!isFinite(dirLocal.x) || !isFinite(dirLocal.y) || !isFinite(dirLocal.z)) return;
+    if(dirLocal.lengthSq() < 1e-6) return;
+    const q = new THREE.Quaternion().setFromUnitVectors(bindDirLocal, dirLocal);
     bone.quaternion.slerp(q, smooth);
   }
 
-  // ★ 胴体・腰の向きを設定
-  // 戦略: 腰(hips)の向きを「両肩を結ぶ線 + 両腰を結ぶ線」から作った座標系で決める
+  // ★ 修正版 胴体: 腰の向きは「親(avatar root)のローカル空間」で
+  //  両腰ベクトルから body forward を出して、Y軸まわりの回転(向き)だけ反映
+  //  前傾は spine ボーンに任せる
   function applyTorsoRotation(person, wlm){
     const B = person.B;
-    // 肩・腰のワールド座標(MediaPipe→Three系)
-    const lSh = lmToVec3(wlm[11], new THREE.Vector3());
-    const rSh = lmToVec3(wlm[12], new THREE.Vector3());
     const lHp = lmToVec3(wlm[23], new THREE.Vector3());
     const rHp = lmToVec3(wlm[24], new THREE.Vector3());
+    const lSh = lmToVec3(wlm[11], new THREE.Vector3());
+    const rSh = lmToVec3(wlm[12], new THREE.Vector3());
+    
+    // 腰のY軸回転(体の向き)のみ
+    const hipRight = lHp.clone().sub(rHp);
+    hipRight.y = 0; // 水平面に投影
+    if(hipRight.lengthSq() < 1e-6) return;
+    hipRight.normalize();
+    // 体の前方向 = right × up
+    const forward = new THREE.Vector3().crossVectors(hipRight, new THREE.Vector3(0,1,0)).normalize();
+    // 体の右方向は再計算
+    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forward).normalize();
+    const up = new THREE.Vector3(0,1,0);
+    
+    // Xbot のバインド時、hipsのローカル軸は「+X=モデルの左、+Y=上、+Z=後ろ」が一般的
+    // つまりワールドのright(モデルの右)はXbotの-Xに対応
+    // ターゲット回転を作る
+    const m = new THREE.Matrix4().makeBasis(right.clone().negate(), up, forward.clone().negate());
+    const targetQ = new THREE.Quaternion().setFromRotationMatrix(m);
+    // バインド回転と合成
+    const finalQ = person.bindHipsQuat.clone().multiply(targetQ);
+    
+    // 腰はavatarルートの子なので、ローカル=ワールドに近い前提でOK
+    person.smoothedHipQuat.slerp(finalQ, POSE_SMOOTH * 0.6);
+    B.hips.quaternion.copy(person.smoothedHipQuat);
+
+    // 上半身の前傾後傾を spine に反映
+    // hipMid → shMid の方向ベクトル
     const hipMid = lHp.clone().add(rHp).multiplyScalar(0.5);
     const shMid  = lSh.clone().add(rSh).multiplyScalar(0.5);
-
-    // 腰の座標系
-    // up:  hip→shoulder
-    // right: rHip→lHip (Mixamoでは左がモデルの左=ワールドX+方向と一致するよう)
-    const up = shMid.clone().sub(hipMid).normalize();
-    const right = lHp.clone().sub(rHp).normalize();
-    // 直交化
-    const forward = new THREE.Vector3().crossVectors(right, up).normalize();
-    right.crossVectors(up, forward).normalize();
-    
-    const m = new THREE.Matrix4().makeBasis(right, up, forward);
-    const targetQ = new THREE.Quaternion().setFromRotationMatrix(m);
-    // 腰は親(avatar root)が単位回転なのでそのまま代入
-    B.hips.quaternion.slerp(targetQ, POSE_SMOOTH);
-
-    // 胴体上部(spine→shoulderMid): hips の up と spine→neck の方向の差で曲げる
-    // spine の bind方向 = +Y (親hipsのローカル)
-    // ターゲット = hipMid→shMid の方向を、hipsローカル空間で表す
-    if(B.spine){
-      const dirWorld = shMid.clone().sub(hipMid).normalize();
-      setBoneDirection(B.spine, dirWorld, BIND_DIRS.spine, POSE_SMOOTH * 0.5);
-    }
-    // 首
-    if(B.neck && wlm[0]){
-      const nose = lmToVec3(wlm[0], new THREE.Vector3());
-      const dirWorld = nose.clone().sub(shMid).normalize();
-      setBoneDirection(B.neck, dirWorld, BIND_DIRS.neck, POSE_SMOOTH * 0.4);
-    }
+    const torsoDirWorld = shMid.sub(hipMid).normalize();
+    setBoneDirection(B.spine, torsoDirWorld, person.bindDirs.spine, POSE_SMOOTH * 0.4);
   }
 
   function applyPose(person, landmarks, worldLandmarks){
     const wlm = worldLandmarks;
     const B = person.B;
+    const bd = person.bindDirs;
     function worldDir(fromIdx, toIdx){
       const a = lmToVec3(wlm[fromIdx], new THREE.Vector3());
       const b = lmToVec3(wlm[toIdx], new THREE.Vector3());
       return b.sub(a).normalize();
     }
-    // ★ 胴体を先に適用（親→子の順）
+    // 順番: 腰の向き → spine → 手足 (親から子へ)
     applyTorsoRotation(person, wlm);
-    // 手足
-    setBoneDirection(B.lShoulder, worldDir(11,13), BIND_DIRS.lShoulder);
-    setBoneDirection(B.lElbow,    worldDir(13,15), BIND_DIRS.lElbow);
-    setBoneDirection(B.rShoulder, worldDir(12,14), BIND_DIRS.rShoulder);
-    setBoneDirection(B.rElbow,    worldDir(14,16), BIND_DIRS.rElbow);
-    setBoneDirection(B.lHip,   worldDir(23,25), BIND_DIRS.lHip);
-    setBoneDirection(B.lKnee,  worldDir(25,27), BIND_DIRS.lKnee);
-    setBoneDirection(B.rHip,   worldDir(24,26), BIND_DIRS.rHip);
-    setBoneDirection(B.rKnee,  worldDir(26,28), BIND_DIRS.rKnee);
+    // avatar の行列を一旦更新してから手足を計算
+    person.avatar.updateMatrixWorld(true);
+    setBoneDirection(B.lShoulder, worldDir(11,13), bd.lShoulder);
+    setBoneDirection(B.lElbow,    worldDir(13,15), bd.lElbow);
+    setBoneDirection(B.rShoulder, worldDir(12,14), bd.rShoulder);
+    setBoneDirection(B.rElbow,    worldDir(14,16), bd.rElbow);
+    setBoneDirection(B.lHip,   worldDir(23,25), bd.lHip);
+    setBoneDirection(B.lKnee,  worldDir(25,27), bd.lKnee);
+    setBoneDirection(B.rHip,   worldDir(24,26), bd.rHip);
+    setBoneDirection(B.rKnee,  worldDir(26,28), bd.rKnee);
   }
 
-  // ★ 走行対応の位置推定
-  // 基準: 「画面に映った被写体のピクセル身長」と「実身長(推定)」の比から距離(奥行き)を出し、
-  //  画像座標と組み合わせて 3D 位置を算出
-  let baselineHeightPx = 0;  // 起動直後の被写体ピクセル身長
-  const REF_DISTANCE = 4.0;  // 基準時の被写体距離(m)
-  const ASSUMED_HEIGHT = 1.7; // 推定身長(m)
+  // ========== 位置(走行対応) ==========
+  let baselineHeightPx = 0;
+  const ASSUMED_HEIGHT = 1.7;
 
   function vis(lm, idx){ return (lm[idx].visibility ?? 1) > VISIBILITY_TH; }
 
   function updateHipPosition(person, landmarks, worldLandmarks){
     const lm = landmarks, wlm = worldLandmarks;
-
-    // (A) 接地: 腰→足首の実距離(worldLandmarks)
     const lAnkleVis = vis(lm, 27), rAnkleVis = vis(lm, 28);
     const lKneeVis  = vis(lm, 25), rKneeVis  = vis(lm, 26);
+
+    // 腰→足首の実距離
     const hipMidYw = (wlm[23].y + wlm[24].y) / 2;
     let hipToFoot;
     if(lAnkleVis || rAnkleVis){
@@ -472,38 +506,38 @@ async function main(){
     } else {
       hipToFoot = person.xbotHipToFoot;
     }
-    hipToFoot = Math.max(0.1, hipToFoot);
+    hipToFoot = Math.max(0.1, Math.min(1.2, hipToFoot));
 
-    // (B) 被写体ピクセル身長: nose(0) と 足首中央
+    // ピクセル身長
     const headYn = lm[0].y;
     let footYn;
     if(lAnkleVis && rAnkleVis) footYn = (lm[27].y + lm[28].y) / 2;
     else if(lAnkleVis) footYn = lm[27].y;
     else if(rAnkleVis) footYn = lm[28].y;
-    else footYn = (lm[25].y + lm[26].y) / 2;  // 膝で代用
-    const heightPx = Math.max(0.05, footYn - headYn); // 正規化座標(0-1)
+    else footYn = (lm[25].y + lm[26].y) / 2;
+    const heightPx = Math.max(0.05, footYn - headYn);
 
     if(baselineHeightPx === 0 && lAnkleVis && rAnkleVis){
       baselineHeightPx = heightPx;
     }
     const refH = baselineHeightPx > 0 ? baselineHeightPx : heightPx;
 
-    // (C) 奥行きZ: ピクセル身長の逆数比例
     const distance = REF_DISTANCE * (refH / heightPx);
-    // 基準距離から手前(+Z)/奥(-Z)
     const targetHipZ = REF_DISTANCE - distance;
 
-    // (D) 水平X: 画像の足元X位置 → 距離に応じた実水平幅で換算
-    // 画面横幅は、その距離での視野幅 ≒ SCENE_WIDTH * (distance/REF_DISTANCE)
     const footXn = (lAnkleVis && rAnkleVis) ? (lm[27].x + lm[28].x)/2 :
                    lAnkleVis ? lm[27].x : rAnkleVis ? lm[28].x : (lm[23].x + lm[24].x)/2;
     const widthAtDist = SCENE_WIDTH * (distance / REF_DISTANCE);
     const targetHipX = (footXn - 0.5) * widthAtDist;
 
-    // (E) 腰のY = 床(0) + 腰高さ
     const targetHipY = hipToFoot + GROUND_OFFSET;
 
-    const target = new THREE.Vector3(targetHipX, Math.max(MIN_HIP_HEIGHT, targetHipY), targetHipZ);
+    // ★ クランプ: アバターが画面外に飛ばないよう範囲制限
+    const target = new THREE.Vector3(
+      Math.max(-8, Math.min(8, targetHipX)),
+      Math.max(MIN_HIP_HEIGHT, Math.min(2.5, targetHipY)),
+      Math.max(-6, Math.min(6, targetHipZ))
+    );
 
     if(!person.posInited){
       person.smoothedHip.copy(target);
@@ -532,28 +566,24 @@ async function main(){
       const mid = pa.clone().add(pb).multiplyScalar(0.5);
       const dir = pb.clone().sub(pa);
       const len = dir.length();
+      if(len < 1e-6) return;
       person.sticks[i].position.copy(mid);
       person.sticks[i].scale.set(1, len, 1);
-      person.sticks[i].quaternion.setFromUnitVectors(UP, dir.normalize());
+      person.sticks[i].quaternion.setFromUnitVectors(UP, dir.clone().normalize());
     });
   }
 
-  // ★ MediaPipe結果と Person のひも付け（簡易IDトラッキング）
-  // 前フレームの位置に最も近い人物を対応付け
+  // ID トラッキング
   function assignPersons(results){
-    // results: { landmarks: [...], worldLandmarks: [...] }
     const numFound = results.landmarks?.length || 0;
-    // 各検出結果の代表座標(腰中央のx,y画像座標)
     const detPos = [];
     for(let i=0;i<numFound;i++){
       const lm = results.landmarks[i];
       detPos.push({ x:(lm[23].x+lm[24].x)/2, y:(lm[23].y+lm[24].y)/2, i });
     }
-    // 既に active な person との対応をグリーディに
     const usedDet = new Set();
     const usedPer = new Set();
     const activePersons = persons.filter(p => p.active);
-    // 距離ペア
     const pairs = [];
     activePersons.forEach(p => {
       detPos.forEach(d => {
@@ -562,30 +592,25 @@ async function main(){
       });
     });
     pairs.sort((a,b) => a.dist - b.dist);
-    const assignments = []; // [{person, detIdx}]
+    const assignments = [];
     for(const pair of pairs){
       if(usedDet.has(pair.d.i) || usedPer.has(pair.p.id)) continue;
-      if(pair.dist > 0.15*0.15) continue; // 大きく離れていたら同一視しない
+      if(pair.dist > 0.2*0.2) continue;
       assignments.push({ person: pair.p, detIdx: pair.d.i });
       usedDet.add(pair.d.i); usedPer.add(pair.p.id);
     }
-    // 残った検出を非アクティブな person に割り当て
     for(const d of detPos){
       if(usedDet.has(d.i)) continue;
       const freeP = persons.find(p => !usedPer.has(p.id));
       if(!freeP) break;
       freeP.active = true;
-      freeP.posInited = false; // 新規なので初期化
+      freeP.posInited = false;
       assignments.push({ person: freeP, detIdx: d.i });
       usedDet.add(d.i); usedPer.add(freeP.id);
     }
-    // 検出から外れた person は非アクティブ化
     persons.forEach(p => {
-      if(!usedPer.has(p.id)){
-        p.active = false;
-      }
+      if(!usedPer.has(p.id)) p.active = false;
     });
-    // 代表位置を更新
     assignments.forEach(({person, detIdx}) => {
       const lm = results.landmarks[detIdx];
       person.lastPx = (lm[23].x+lm[24].x)/2;
@@ -612,7 +637,6 @@ async function main(){
             updateStick(person, lm, wlm);
           });
           refreshVisibility();
-          // デバッグ
           const active = persons.filter(p => p.active);
           debugPanel.innerHTML =
             `検出: ${result.landmarks.length}人 / 最大${numPosesWanted}<br>` +
