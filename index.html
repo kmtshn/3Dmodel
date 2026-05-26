@@ -17,8 +17,34 @@
 body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:system-ui,-apple-system,sans-serif}
 #canvas-container{position:relative;width:100%;flex:1;background:#0f172a}
 #main-canvas{display:block;width:100%;height:100%}
-#input-video{position:absolute;right:10px;bottom:10px;width:220px;max-width:30vw;height:auto;border:2px solid #60a5fa;border-radius:6px;background:#000;z-index:35;box-shadow:0 4px 12px rgba(0,0,0,.5);object-fit:contain}
-#video-label{position:absolute;right:10px;bottom:10px;background:rgba(59,130,246,.9);color:#fff;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 0;z-index:36;pointer-events:none}
+
+/* ★ 動画を大きく・リサイズ可能に */
+#video-wrap{
+  position:absolute; right:10px; bottom:10px;
+  width:420px; max-width:60vw;
+  border:2px solid #60a5fa; border-radius:6px;
+  background:#000; z-index:35;
+  box-shadow:0 4px 12px rgba(0,0,0,.5);
+  resize: both; overflow:hidden;
+  min-width:160px; min-height:90px;
+}
+#input-video{
+  display:block; width:100%; height:100%;
+  object-fit:contain; background:#000;
+}
+#video-label{
+  position:absolute; left:0; top:0;
+  background:rgba(59,130,246,.9); color:#fff;
+  font-size:10px; font-weight:bold;
+  padding:2px 6px; border-radius:0 0 4px 0;
+  z-index:36; pointer-events:none;
+}
+#video-size-hint{
+  position:absolute; right:4px; bottom:2px;
+  color:#94a3b8; font-size:9px; pointer-events:none;
+  background:rgba(0,0,0,.5); padding:1px 4px; border-radius:3px;
+}
+
 #loading-overlay{position:absolute;inset:0;background:rgba(15,23,42,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:50;padding:20px;text-align:center}
 #error-box{display:none;position:absolute;top:10px;left:10px;right:10px;background:rgba(220,38,38,.95);color:#fff;padding:10px;border-radius:6px;font-size:11px;z-index:60;white-space:pre-wrap;max-height:50vh;overflow:auto}
 #debug-panel{position:absolute;top:60px;right:10px;background:rgba(0,0,0,.6);color:#34d399;font-family:monospace;font-size:10px;padding:6px;border-radius:4px;z-index:40;pointer-events:none;min-width:160px}
@@ -50,12 +76,16 @@ body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:s
   </div>
   <button id="reset-btn" class="btn flex-shrink-0">🔄 基準リセット</button>
   <button id="toggle-video-btn" class="btn flex-shrink-0">📹 動画表示</button>
+  <button id="video-size-btn" class="btn flex-shrink-0">🔍 動画サイズ</button>
 </header>
 
 <div id="canvas-container">
   <canvas id="main-canvas"></canvas>
-  <video id="input-video" playsinline muted></video>
-  <div id="video-label">📹 INPUT</div>
+  <div id="video-wrap">
+    <video id="input-video" playsinline muted></video>
+    <div id="video-label">📹 INPUT</div>
+    <div id="video-size-hint">右下ドラッグでリサイズ</div>
+  </div>
   <div class="view-label" style="left:8px;top:8px">PERSPECTIVE</div>
   <div class="view-label" id="lbl-front">FRONT</div>
   <div class="view-label" id="lbl-side">SIDE</div>
@@ -84,6 +114,7 @@ const progressFill = document.getElementById('progress-fill');
 const debugPanel = document.getElementById('debug-panel');
 const footerInfo = document.getElementById('footer-info');
 const video = document.getElementById('input-video');
+const videoWrap = document.getElementById('video-wrap');
 const videoLabel = document.getElementById('video-label');
 const canvas = document.getElementById('main-canvas');
 
@@ -100,8 +131,24 @@ window.addEventListener('unhandledrejection', e => {
 let videoVisible = true;
 document.getElementById('toggle-video-btn').addEventListener('click', () => {
   videoVisible = !videoVisible;
-  video.style.display = videoVisible ? 'block' : 'none';
-  videoLabel.style.display = videoVisible ? 'block' : 'none';
+  videoWrap.style.display = videoVisible ? 'block' : 'none';
+});
+
+// ★ 動画サイズプリセット切り替えボタン
+const videoSizes = ['small','medium','large','xlarge'];
+const sizeMap = { small:'240px', medium:'420px', large:'600px', xlarge:'820px' };
+let videoSizeIdx = 1;
+document.getElementById('video-size-btn').addEventListener('click', () => {
+  videoSizeIdx = (videoSizeIdx + 1) % videoSizes.length;
+  videoWrap.style.width = sizeMap[videoSizes[videoSizeIdx]];
+  videoWrap.style.height = ''; // aspect-ratioを動画自身に任せる
+});
+
+// 動画ロード時にアスペクト比に合わせて高さ調整
+video.addEventListener('loadedmetadata', () => {
+  const w = videoWrap.offsetWidth;
+  const ratio = video.videoHeight / Math.max(video.videoWidth,1);
+  videoWrap.style.height = (w * ratio) + 'px';
 });
 
 // ===== パラメータ =====
@@ -115,7 +162,6 @@ const MIN_HIP_HEIGHT   = 0.3;
 const SCENE_WIDTH      = 6.0;
 const REF_DISTANCE     = 4.0;
 const MAX_PERSONS      = 3;
-const PERSON_SPACING   = 1.2;
 
 async function main(){
   setStep('three.js 読み込み中...');
@@ -154,7 +200,6 @@ async function main(){
   renderer.shadowMap.enabled = true;
   renderer.setScissorTest(true);
 
-  // ★ カメラを引いて全体が見えるように
   const camPersp = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camPersp.position.set(5, 3.5, 7);
   camPersp.lookAt(0, 0.9, 0);
@@ -194,7 +239,6 @@ async function main(){
     [24,26],[26,28],[28,32],
   ];
 
-  // ★ Xbotのバインドポーズで各骨の「子へ向かう方向」をローカル座標で計測
   function measureBindDirs(avatar){
     avatar.updateMatrixWorld(true);
     const bones = {};
@@ -228,7 +272,6 @@ async function main(){
       this.color = PERSON_COLORS[id % PERSON_COLORS.length];
       this.bindDirs = bindDirs;
 
-      // ★ SkeletonUtils.clone でスキニングを正しく複製
       this.avatar = skeletonClone(gltfTemplate.scene);
       this.avatar.traverse(o => {
         if(o.isMesh){
@@ -265,13 +308,17 @@ async function main(){
       this.bindHipsPos = this.B.hips.position.clone();
       this.bindHipsQuat = this.B.hips.quaternion.clone();
 
-      // バインドポーズでの腰→足首距離(実測)
       this.avatar.updateMatrixWorld(true);
       const hp = new THREE.Vector3(); this.B.hips.getWorldPosition(hp);
       const ap = new THREE.Vector3(); this.B.lAnkle.getWorldPosition(ap);
       this.xbotHipToFoot = Math.abs(hp.y - ap.y);
 
-      // スティック
+      // ★ バインド時の hips のワールド「右(+X)」「上(+Y)」「前(+Z)」を計測
+      //    Xbot は T-pose で正面が +Z 方向を向いている
+      const hipsWQ = new THREE.Quaternion();
+      this.B.hips.getWorldQuaternion(hipsWQ);
+      this.bindHipsWorldQuat = hipsWQ.clone();
+
       this.stickGroup = new THREE.Group();
       scene.add(this.stickGroup);
       this.joints = [];
@@ -289,7 +336,7 @@ async function main(){
       });
 
       this.smoothedHip = new THREE.Vector3();
-      this.smoothedHipQuat = new THREE.Quaternion();
+      this.smoothedHipQuat = new THREE.Quaternion().copy(this.bindHipsQuat);
       this.posInited = false;
       this.active = false;
       this.lastPx = 0; this.lastPy = 0;
@@ -299,13 +346,12 @@ async function main(){
       this.stickGroup.visible = this.active && showStick;
     }
     resetPose(){
-      // バインドポーズに戻す
       this.B.hips.quaternion.copy(this.bindHipsQuat);
       this.B.hips.position.copy(this.bindHipsPos);
+      this.smoothedHipQuat.copy(this.bindHipsQuat);
     }
   }
 
-  // 一旦テンプレートからバインド方向を計測
   const tempAvatar = skeletonClone(gltfTemplate.scene);
   scene.add(tempAvatar);
   const bindDirs = measureBindDirs(tempAvatar);
@@ -396,64 +442,98 @@ async function main(){
     footerInfo.innerText = '🔄 基準リセット完了';
   });
 
-  // ========== 姿勢適用ロジック（修正版） ==========
-  // MediaPipe → Three.js 座標
+  // ========== 姿勢適用ロジック ==========
+  //
+  // 【座標系について】
+  //  MediaPipe world landmarks:
+  //    x: 被写体の左 → 右が +（カメラから見ると逆。カメラから見て右側は -x）
+  //       実際にはMediaPipeの仕様で、x は画像座標系と同じ「画面右が +」。
+  //       world landmarks の x も image と同じ向き（被写体目線では左右反転）。
+  //    y: 下が +
+  //    z: カメラに近い方が -
+  //  Three.js: y上, z画面手前
+  //
+  //  変換: (mp.x, mp.y, mp.z) → (mp.x, -mp.y, -mp.z) でThree.js座標へ
+  //  → Three.js での +X = カメラから見て右 = 被写体の左
+  //
+  //  Xbot のバインドポーズ:
+  //    アバターは +Z 方向（カメラの手前側）を正面として立っている
+  //    つまり画面奥に背中、手前にお腹
+  //  → 被写体が「画面に対して正面（カメラを向いている）」のとき、
+  //    アバターは手前(+Z)を向くべき = カメラ目線で「こちらを向く」
+  //
   function lmToVec3(lm, out){ out.set(lm.x, -lm.y, -lm.z); return out; }
 
-  // ★ 修正版: 親のワールド行列を「その都度更新」してから子の方向を計算
   function setBoneDirection(bone, dirWorld, bindDirLocal, smooth=POSE_SMOOTH){
     if(!bone || !bone.parent) return;
-    // 親の最新ワールド行列を強制更新
     bone.parent.updateWorldMatrix(true, false);
     const parentQ = new THREE.Quaternion();
     bone.parent.getWorldQuaternion(parentQ);
     const dirLocal = dirWorld.clone().applyQuaternion(parentQ.invert()).normalize();
-    // NaN ガード
     if(!isFinite(dirLocal.x) || !isFinite(dirLocal.y) || !isFinite(dirLocal.z)) return;
     if(dirLocal.lengthSq() < 1e-6) return;
     const q = new THREE.Quaternion().setFromUnitVectors(bindDirLocal, dirLocal);
     bone.quaternion.slerp(q, smooth);
   }
 
-  // ★ 修正版 胴体: 腰の向きは「親(avatar root)のローカル空間」で
-  //  両腰ベクトルから body forward を出して、Y軸まわりの回転(向き)だけ反映
-  //  前傾は spine ボーンに任せる
+  // ★ 修正版: 胴体回転
+  //   肩と腰のworld landmarksから「体の右」「体の上」を出して、
+  //   それらから forward(=right × up) を計算。
+  //   Xbot のバインドポーズでは hips のワールド軸が
+  //     右= +X, 上= +Y, 前= +Z
+  //   になっているので、ターゲットの (right, up, forward) を
+  //   行列の (X軸, Y軸, Z軸) としてそのまま組めばOK。
   function applyTorsoRotation(person, wlm){
     const B = person.B;
     const lHp = lmToVec3(wlm[23], new THREE.Vector3());
     const rHp = lmToVec3(wlm[24], new THREE.Vector3());
     const lSh = lmToVec3(wlm[11], new THREE.Vector3());
     const rSh = lmToVec3(wlm[12], new THREE.Vector3());
-    
-    // 腰のY軸回転(体の向き)のみ
-    const hipRight = lHp.clone().sub(rHp);
-    hipRight.y = 0; // 水平面に投影
-    if(hipRight.lengthSq() < 1e-6) return;
-    hipRight.normalize();
-    // 体の前方向 = right × up
-    const forward = new THREE.Vector3().crossVectors(hipRight, new THREE.Vector3(0,1,0)).normalize();
-    // 体の右方向は再計算
-    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forward).normalize();
-    const up = new THREE.Vector3(0,1,0);
-    
-    // Xbot のバインド時、hipsのローカル軸は「+X=モデルの左、+Y=上、+Z=後ろ」が一般的
-    // つまりワールドのright(モデルの右)はXbotの-Xに対応
-    // ターゲット回転を作る
-    const m = new THREE.Matrix4().makeBasis(right.clone().negate(), up, forward.clone().negate());
-    const targetQ = new THREE.Quaternion().setFromRotationMatrix(m);
-    // バインド回転と合成
-    const finalQ = person.bindHipsQuat.clone().multiply(targetQ);
-    
-    // 腰はavatarルートの子なので、ローカル=ワールドに近い前提でOK
-    person.smoothedHipQuat.slerp(finalQ, POSE_SMOOTH * 0.6);
-    B.hips.quaternion.copy(person.smoothedHipQuat);
 
-    // 上半身の前傾後傾を spine に反映
-    // hipMid → shMid の方向ベクトル
+    // 体の右 = 右腰 → 左腰  ではなく、
+    // Three.js座標で +X が「カメラから見て右 = 被写体の左」なので、
+    // 被写体の右側は -X 寄り。
+    // MediaPipe で index 24 = right hip (被写体の右), 23 = left hip (被写体の左)
+    // よって 被写体の「体の右方向」を表すベクトルは: rHp - lHp
+    //   (rHp は被写体右 = -X 寄り、lHp は被写体左 = +X 寄り、なので
+    //    rHp - lHp は -X 方向。これは「カメラから見て左」)
+    //
+    // でも我々が欲しいのは Xbot の hips ローカル +X 軸に対応する向き。
+    // Xbot の +X はアバターの「右手側」 = 被写体の右手側。
+    // よってアバターの +X に対応するワールド方向は rHp - lHp で正しい。
+    const bodyRight = new THREE.Vector3().subVectors(rHp, lHp);
+
+    // 体の上 = 肩中央 - 腰中央
     const hipMid = lHp.clone().add(rHp).multiplyScalar(0.5);
     const shMid  = lSh.clone().add(rSh).multiplyScalar(0.5);
-    const torsoDirWorld = shMid.sub(hipMid).normalize();
-    setBoneDirection(B.spine, torsoDirWorld, person.bindDirs.spine, POSE_SMOOTH * 0.4);
+    const bodyUp = shMid.clone().sub(hipMid);
+
+    if(bodyRight.lengthSq() < 1e-6 || bodyUp.lengthSq() < 1e-6) return;
+    bodyRight.normalize();
+    bodyUp.normalize();
+
+    // forward = right × up（右手座標系）
+    const bodyForward = new THREE.Vector3().crossVectors(bodyRight, bodyUp).normalize();
+    // up を直交化
+    const orthUp = new THREE.Vector3().crossVectors(bodyForward, bodyRight).normalize();
+
+    // Xbot hips のローカル軸対応:
+    //   ローカル +X(右) → bodyRight
+    //   ローカル +Y(上) → orthUp
+    //   ローカル +Z(前) → bodyForward
+    const m = new THREE.Matrix4().makeBasis(bodyRight, orthUp, bodyForward);
+    const targetWorldQ = new THREE.Quaternion().setFromRotationMatrix(m);
+
+    // hips の親(=avatar root)のワールド回転を考慮してローカルに変換
+    // ただし avatar root は回していないので parent world quat ≒ identity
+    // 念のため計算する
+    B.hips.parent.updateWorldMatrix(true, false);
+    const parentWQ = new THREE.Quaternion();
+    B.hips.parent.getWorldQuaternion(parentWQ);
+    const targetLocalQ = parentWQ.clone().invert().multiply(targetWorldQ);
+
+    person.smoothedHipQuat.slerp(targetLocalQ, POSE_SMOOTH * 0.7);
+    B.hips.quaternion.copy(person.smoothedHipQuat);
   }
 
   function applyPose(person, landmarks, worldLandmarks){
@@ -465,10 +545,16 @@ async function main(){
       const b = lmToVec3(wlm[toIdx], new THREE.Vector3());
       return b.sub(a).normalize();
     }
-    // 順番: 腰の向き → spine → 手足 (親から子へ)
+    // 腰の向きを先に決める
     applyTorsoRotation(person, wlm);
-    // avatar の行列を一旦更新してから手足を計算
     person.avatar.updateMatrixWorld(true);
+
+    // 肩・肘
+    // ※ MediaPipe の "Left" は被写体の左 = カメラから見て右
+    // Xbot の mixamorigLeftArm もキャラクター自身の左 = 同じ意味
+    // よってインデックスは素直に対応:
+    //   11 = left shoulder (被写体左) → lShoulder
+    //   12 = right shoulder           → rShoulder
     setBoneDirection(B.lShoulder, worldDir(11,13), bd.lShoulder);
     setBoneDirection(B.lElbow,    worldDir(13,15), bd.lElbow);
     setBoneDirection(B.rShoulder, worldDir(12,14), bd.rShoulder);
@@ -479,9 +565,8 @@ async function main(){
     setBoneDirection(B.rKnee,  worldDir(26,28), bd.rKnee);
   }
 
-  // ========== 位置(走行対応) ==========
+  // ========== 位置 ==========
   let baselineHeightPx = 0;
-  const ASSUMED_HEIGHT = 1.7;
 
   function vis(lm, idx){ return (lm[idx].visibility ?? 1) > VISIBILITY_TH; }
 
@@ -490,7 +575,6 @@ async function main(){
     const lAnkleVis = vis(lm, 27), rAnkleVis = vis(lm, 28);
     const lKneeVis  = vis(lm, 25), rKneeVis  = vis(lm, 26);
 
-    // 腰→足首の実距離
     const hipMidYw = (wlm[23].y + wlm[24].y) / 2;
     let hipToFoot;
     if(lAnkleVis || rAnkleVis){
@@ -508,7 +592,6 @@ async function main(){
     }
     hipToFoot = Math.max(0.1, Math.min(1.2, hipToFoot));
 
-    // ピクセル身長
     const headYn = lm[0].y;
     let footYn;
     if(lAnkleVis && rAnkleVis) footYn = (lm[27].y + lm[28].y) / 2;
@@ -532,7 +615,6 @@ async function main(){
 
     const targetHipY = hipToFoot + GROUND_OFFSET;
 
-    // ★ クランプ: アバターが画面外に飛ばないよう範囲制限
     const target = new THREE.Vector3(
       Math.max(-8, Math.min(8, targetHipX)),
       Math.max(MIN_HIP_HEIGHT, Math.min(2.5, targetHipY)),
