@@ -17,7 +17,36 @@
 body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:system-ui,-apple-system,sans-serif}
 #canvas-container{position:relative;width:100%;flex:1;background:#0f172a}
 #main-canvas{display:block;width:100%;height:100%}
-#input-video{display:none}
+
+/* ★ 元動画を小さくPIP表示 */
+#input-video{
+  position:absolute;
+  right:10px;
+  bottom:10px;
+  width:200px;
+  max-width:30vw;
+  height:auto;
+  border:2px solid #60a5fa;
+  border-radius:6px;
+  background:#000;
+  z-index:35;
+  box-shadow:0 4px 12px rgba(0,0,0,.5);
+  object-fit:contain;
+}
+#video-label{
+  position:absolute;
+  right:10px;
+  bottom:10px;
+  background:rgba(59,130,246,.9);
+  color:#fff;
+  font-size:10px;
+  font-weight:bold;
+  padding:2px 6px;
+  border-radius:3px 0 0 0;
+  z-index:36;
+  pointer-events:none;
+}
+
 #loading-overlay{position:absolute;inset:0;background:rgba(15,23,42,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:50;padding:20px;text-align:center}
 #error-box{display:none;position:absolute;top:10px;left:10px;right:10px;background:rgba(220,38,38,.95);color:#fff;padding:10px;border-radius:6px;font-size:11px;z-index:60;white-space:pre-wrap;max-height:50vh;overflow:auto}
 #debug-panel{position:absolute;top:60px;right:10px;background:rgba(0,0,0,.6);color:#34d399;font-family:monospace;font-size:10px;padding:6px;border-radius:4px;z-index:40;pointer-events:none;min-width:140px}
@@ -43,11 +72,13 @@ body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:s
     <button class="btn" data-view="both">🧍🦴 両方</button>
   </div>
   <button id="reset-btn" class="btn flex-shrink-0">🔄 基準リセット</button>
+  <button id="toggle-video-btn" class="btn flex-shrink-0">📹 動画表示</button>
 </header>
 
 <div id="canvas-container">
   <canvas id="main-canvas"></canvas>
   <video id="input-video" playsinline muted></video>
+  <div id="video-label">📹 INPUT</div>
   <div class="view-label" style="left:8px;top:8px">PERSPECTIVE</div>
   <div class="view-label" id="lbl-front">FRONT</div>
   <div class="view-label" id="lbl-side">SIDE</div>
@@ -76,6 +107,7 @@ const progressFill = document.getElementById('progress-fill');
 const debugPanel = document.getElementById('debug-panel');
 const footerInfo = document.getElementById('footer-info');
 const video = document.getElementById('input-video');
+const videoLabel = document.getElementById('video-label');
 const canvas = document.getElementById('main-canvas');
 
 let currentStep = '初期化前';
@@ -88,14 +120,27 @@ window.addEventListener('unhandledrejection', e => {
   showError(`unhandledrejection: ${msg}\n${e.reason?.stack||''}`);
 });
 
+// ===== 動画表示トグル =====
+let videoVisible = true;
+document.getElementById('toggle-video-btn').addEventListener('click', () => {
+  videoVisible = !videoVisible;
+  video.style.display = videoVisible ? 'block' : 'none';
+  videoLabel.style.display = videoVisible ? 'block' : 'none';
+});
+
 // ===== 調整可能パラメータ =====
-const HORIZONTAL_SCALE = 2.5;   // 水平移動倍率（標準）
-const DEPTH_SCALE      = 1.5;   // 奥行き移動倍率
-const POSE_SMOOTH      = 0.4;   // 姿勢スムージング(0-1)
-const POS_SMOOTH       = 0.20;  // 位置スムージング(0-1)
-const VISIBILITY_TH    = 0.5;   // 可視性しきい値
-const ORTHO_HALF_HEIGHT = 1.3;  // 三面図の縦半幅
-const ORTHO_CENTER_Y    = 0.9;  // 三面図カメラの注視点Y
+const HORIZONTAL_SCALE = 2.5;
+const DEPTH_SCALE      = 1.5;
+const POSE_SMOOTH      = 0.4;
+const POS_SMOOTH       = 0.20;
+const VISIBILITY_TH    = 0.5;
+const ORTHO_HALF_HEIGHT = 1.3;
+const ORTHO_CENTER_Y    = 0.9;
+
+// ★ 接地調整パラメータ
+const GROUND_OFFSET    = 0.05;  // 床から少し浮かせる余裕（埋まり防止）
+const MIN_HIP_HEIGHT   = 0.4;   // 腰の最低高さ（しゃがみでもこれ以下にしない）
+const HIP_HEIGHT_SCALE = 1.0;   // 腰高さの倍率（被写体の身長補正）
 
 async function main(){
   setStep('手順(1/6): three.js を読み込み中...', '3Dライブラリを取得');
@@ -107,13 +152,11 @@ async function main(){
   const mp = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs');
   const { PoseLandmarker, FilesetResolver } = mp;
 
-  // ====== 3Dシーン構築 ======
   setStep('手順(4/6): 3D空間を準備中...', 'シーン構築');
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0f172a);
   scene.fog = new THREE.Fog(0x0f172a, 8, 25);
 
-  // ライト
   scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.7));
   const dl = new THREE.DirectionalLight(0xffffff, 1.2);
   dl.position.set(3, 6, 4); dl.castShadow = true;
@@ -122,7 +165,6 @@ async function main(){
   dl.shadow.camera.top=3; dl.shadow.camera.bottom=-3;
   scene.add(dl);
 
-  // 床とグリッド
   const floorMat = new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.85, metalness:0.1});
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(20,20), floorMat);
   floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
@@ -130,13 +172,11 @@ async function main(){
   const grid = new THREE.GridHelper(20, 20, 0x475569, 0x334155);
   scene.add(grid);
 
-  // レンダラー
   const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.setScissorTest(true);
 
-  // 4つのカメラ
   const camPersp = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camPersp.position.set(2.5, 1.8, 3.5);
   camPersp.lookAt(0, 0.9, 0);
@@ -160,7 +200,6 @@ async function main(){
     cam.updateProjectionMatrix();
   }
 
-  // ====== Xbot ロード ======
   setStep('手順(5/6): キャラクターモデル読み込み中...', 'Xbot を取得');
   const XBOT_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r158/examples/models/gltf/Xbot.glb';
   const gltf = await new Promise((resolve, reject) => {
@@ -170,7 +209,6 @@ async function main(){
   avatar.traverse(o => { if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; }});
   scene.add(avatar);
 
-  // ボーン取得
   const bones = {};
   avatar.traverse(o => { if(o.isBone) bones[o.name] = o; });
   console.log('ボーン数:', Object.keys(bones).length);
@@ -195,12 +233,20 @@ async function main(){
     rAnkle: bones.mixamorigRightFoot,
   };
 
-  // バインドポーズ保存
   const bindHipsPos = B.hips.position.clone();
   const bindQuats = {};
   Object.keys(B).forEach(k => { if(B[k]) bindQuats[k] = B[k].quaternion.clone(); });
 
-  // ====== スティックピクチャー ======
+  // ★ Xbot本来の腰高さを記録（バインドポーズでの足首から腰までの距離）
+  // mixamorigHips のワールドY位置をバインドポーズで取得
+  avatar.updateMatrixWorld(true);
+  const bindHipWorldPos = new THREE.Vector3();
+  B.hips.getWorldPosition(bindHipWorldPos);
+  const bindLAnkleWorldPos = new THREE.Vector3();
+  B.lAnkle.getWorldPosition(bindLAnkleWorldPos);
+  const XBOT_HIP_TO_FOOT = bindHipWorldPos.y - bindLAnkleWorldPos.y; // 通常 ~0.9m
+  console.log(`Xbot 腰-足首距離: ${XBOT_HIP_TO_FOOT.toFixed(3)}m`);
+
   const stickGroup = new THREE.Group();
   scene.add(stickGroup);
   const joints = [];
@@ -212,10 +258,10 @@ async function main(){
     stickGroup.add(m); joints.push(m);
   }
   const STICK_BONES = [
-    [11,13],[13,15],[12,14],[14,16],     // 腕
-    [11,12],[23,24],[11,23],[12,24],     // 胴
-    [23,25],[25,27],[27,31],             // 左脚
-    [24,26],[26,28],[28,32],             // 右脚
+    [11,13],[13,15],[12,14],[14,16],
+    [11,12],[23,24],[11,23],[12,24],
+    [23,25],[25,27],[27,31],
+    [24,26],[26,28],[28,32],
   ];
   const boneMat = new THREE.MeshStandardMaterial({color:0x60a5fa});
   const sticks = STICK_BONES.map(()=>{
@@ -224,7 +270,6 @@ async function main(){
   });
   stickGroup.visible = false;
 
-  // ビュー切替
   let viewMode = 'avatar';
   document.querySelectorAll('[data-view]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -235,7 +280,7 @@ async function main(){
       stickGroup.visible = (viewMode === 'stick' || viewMode === 'both');
     });
   });
-  // ====== MediaPipe初期化 ======
+
   setStep('手順(6/6): AIエンジン初期化中...', 'WASM環境準備');
   const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm');
   setStep('AIモデルをダウンロード中...', '約7MB');
@@ -272,12 +317,10 @@ async function main(){
   overlay.style.display = 'none';
   footerInfo.innerText = '✓ 準備完了。動画を選択してください。';
 
-  // ====== ファイル入力 ======
   document.getElementById('file-input').addEventListener('change', e => {
     const f = e.target.files[0]; if(!f) return;
     if(video.src) URL.revokeObjectURL(video.src);
     video.src = URL.createObjectURL(f);
-    // 基準リセット
     baselineSet = false; posInited = false;
     lastTs = 0; lastVideoTime = -1;
     video.play().catch(err => console.warn('play失敗', err));
@@ -288,34 +331,12 @@ async function main(){
     footerInfo.innerText = '🔄 基準リセット完了';
   });
 
-  // ====== 姿勢適用ロジック ======
   const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
   const tmpQ = new THREE.Quaternion();
   const UP = new THREE.Vector3(0,1,0);
 
-  // 座標変換: MediaPipe(X右,Y下,Z前) → Three.js(X右,Y上,Z後)
   function lmToVec3(lm, out){ out.set(lm.x, -lm.y, -lm.z); return out; }
 
-  // ボーン回転を方向ベクトルから設定
-  // バインド方向 → 目標方向 のクォータニオンを計算し、親回転を考慮して適用
-  function aimBone(bone, fromIdx, toIdx, wlm, bindDir){
-    const from = lmToVec3(wlm[fromIdx], new THREE.Vector3());
-    const to   = lmToVec3(wlm[toIdx], new THREE.Vector3());
-    const dir = to.sub(from).normalize();
-    // 親のワールド回転の逆を掛けてローカル化
-    const parentQ = new THREE.Quaternion();
-    bone.parent.getWorldQuaternion(parentQ);
-    parentQ.invert();
-    dir.applyQuaternion(parentQ);
-    tmpQ.setFromUnitVectors(bindDir, dir);
-    bone.quaternion.slerp(
-      bindQuats[Object.keys(B).find(k => B[k]===bone)] ? 
-        bindQuats[Object.keys(B).find(k => B[k]===bone)].clone().multiply(tmpQ) : tmpQ,
-      POSE_SMOOTH
-    );
-  }
-
-  // よりシンプルで安定したアプローチ: 親骨のローカル空間で direction を計算
   function setBoneDirection(bone, dirWorld, bindDirLocal){
     if(!bone || !bone.parent) return;
     const parentQ = new THREE.Quaternion();
@@ -325,8 +346,6 @@ async function main(){
     bone.quaternion.slerp(q, POSE_SMOOTH);
   }
 
-  // バインド方向（Mixamoリグの各骨の「子へ向かう方向」をローカル空間で）
-  // 腕: X軸方向 / 脚: -Y軸方向（一般的なMixamo配置）
   const BIND_DIRS = {
     lShoulder: new THREE.Vector3(1, 0, 0),
     lElbow:    new THREE.Vector3(1, 0, 0),
@@ -345,19 +364,17 @@ async function main(){
       const b = lmToVec3(wlm[toIdx], new THREE.Vector3());
       return b.sub(a).normalize();
     }
-    // 腕
     setBoneDirection(B.lShoulder, worldDir(11,13), BIND_DIRS.lShoulder);
     setBoneDirection(B.lElbow,    worldDir(13,15), BIND_DIRS.lElbow);
     setBoneDirection(B.rShoulder, worldDir(12,14), BIND_DIRS.rShoulder);
     setBoneDirection(B.rElbow,    worldDir(14,16), BIND_DIRS.rElbow);
-    // 脚
     setBoneDirection(B.lHip,   worldDir(23,25), BIND_DIRS.lHip);
     setBoneDirection(B.lKnee,  worldDir(25,27), BIND_DIRS.lKnee);
     setBoneDirection(B.rHip,   worldDir(24,26), BIND_DIRS.rHip);
     setBoneDirection(B.rKnee,  worldDir(26,28), BIND_DIRS.rKnee);
   }
 
-  // ====== 接地&移動ロジック ======
+  // ====== 接地&移動ロジック（修正版） ======
   let baselineSet = false;
   let baselineHipX = 0.5, baselineShoulderWidth = 0.2, subjectHeight = 1.7;
   let posInited = false;
@@ -368,7 +385,6 @@ async function main(){
   function updateHipPosition(landmarks, worldLandmarks){
     const lm = landmarks, wlm = worldLandmarks;
 
-    // 初回フレームで基準値を記録
     if(!baselineSet){
       baselineHipX = (lm[23].x + lm[24].x) / 2;
       baselineShoulderWidth = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y);
@@ -379,43 +395,60 @@ async function main(){
       console.log(`基準設定: hipX=${baselineHipX.toFixed(3)}, shW=${baselineShoulderWidth.toFixed(3)}, H=${subjectHeight.toFixed(2)}m`);
     }
 
-    // (1) 身体の最下点を画像座標から検出（接地候補）
-    const candidates = [
-      {idx:27, w:'lAnkle'}, {idx:28, w:'rAnkle'},
-      {idx:23, w:'lHip'},   {idx:24, w:'rHip'},
-      {idx:25, w:'lKnee'},  {idx:26, w:'rKnee'},
-      {idx:15, w:'lWrist'}, {idx:16, w:'rWrist'},
-    ];
-    let lowestImgY = -Infinity, lowestIdx = 27;
-    for(const c of candidates){
-      if(!vis(lm, c.idx)) continue;
-      if(lm[c.idx].y > lowestImgY){ lowestImgY = lm[c.idx].y; lowestIdx = c.idx; }
+    // ★ 修正版 接地ロジック
+    // worldLandmarks は腰中心を原点とした実寸(m)、Y軸は下が正。
+    // Three.js座標系では Y上が正なので、最終的に符号を反転する。
+    //
+    // 各ランドマークの「腰中心からの下方向距離」= wlm[i].y (Y下が正なのでそのまま)
+    // → 最も下にある(=yが最大)ランドマークが「接地候補」
+    
+    // 足首を最優先、可視性が低ければ膝、それも無ければ腰自身を基準にする
+    const lAnkleVis = vis(lm, 27);
+    const rAnkleVis = vis(lm, 28);
+    const lKneeVis  = vis(lm, 25);
+    const rKneeVis  = vis(lm, 26);
+    
+    const hipMidY = (wlm[23].y + wlm[24].y) / 2;
+    
+    // 「腰中心から下方向への距離」を計算（正の値）
+    let hipToLowestY;
+    if(lAnkleVis || rAnkleVis){
+      // 両足首が見えていれば、より低い(yが大きい)ほうを採用
+      let ankleY;
+      if(lAnkleVis && rAnkleVis) ankleY = Math.max(wlm[27].y, wlm[28].y);
+      else if(lAnkleVis) ankleY = wlm[27].y;
+      else ankleY = wlm[28].y;
+      hipToLowestY = ankleY - hipMidY;
+    } else if(lKneeVis || rKneeVis){
+      // 足首が見えなければ膝で代用し、膝-足首の標準長を足す（約0.45m）
+      let kneeY;
+      if(lKneeVis && rKneeVis) kneeY = Math.max(wlm[25].y, wlm[26].y);
+      else if(lKneeVis) kneeY = wlm[25].y;
+      else kneeY = wlm[26].y;
+      hipToLowestY = (kneeY - hipMidY) + 0.45;
+    } else {
+      // 何も見えなければXbotのバインド値を使う
+      hipToLowestY = XBOT_HIP_TO_FOOT;
     }
+    
+    // 異常値ガード（負や極端な値を補正）
+    hipToLowestY = Math.max(0.1, hipToLowestY);
 
-    // (2) worldLandmarks で「腰中心 → 最下点」の垂直距離（Y下が正なので符号反転）
-    const hipMidWorldY = (wlm[23].y + wlm[24].y) / 2;
-    const lowestWorldY = wlm[lowestIdx].y;
-    // MediaPipe: Y下が正。腰より低い部位 = wlm[lowest].y > hipMidWorldY
-    // Three系での「腰から最下点までの下方向距離」= lowestWorldY - hipMidWorldY (正の値)
-    const hipToFloorDist = Math.max(0, lowestWorldY - hipMidWorldY);
+    // ★ 腰のY座標 = 床(0) + 足から腰までの距離 + 床からの余裕
+    let targetHipY = hipToLowestY * HIP_HEIGHT_SCALE + GROUND_OFFSET;
+    // 最低高さを保証（極端なしゃがみで埋まらないように）
+    targetHipY = Math.max(targetHipY, MIN_HIP_HEIGHT);
 
-    // (3) 腰の絶対Y: 床(y=0)に最下点が接地するよう腰を持ち上げる
-    const targetHipY = hipToFloorDist;
-
-    // (4) 水平移動: 画像座標の腰X中心からのズレ
+    // 水平移動
     const currentHipX = (lm[23].x + lm[24].x) / 2;
-    const dxImage = currentHipX - baselineHipX;  // -0.5〜+0.5
-    // 画面右に動くと被写体は右へ → ワールド +X
+    const dxImage = currentHipX - baselineHipX;
     const targetHipX = bindHipsPos.x + dxImage * HORIZONTAL_SCALE;
 
-    // (5) 奥行きZ: 肩幅変化から推定（近づくと肩幅が大きくなる→Z+）
+    // 奥行きZ
     const currentShW = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y);
     const depthRatio = baselineShoulderWidth / Math.max(currentShW, 0.01);
-    // depthRatio>1 → 遠ざかった(肩幅縮小) → 奥(-Z)
-    // depthRatio<1 → 近づいた → 手前(+Z)
     const targetHipZ = bindHipsPos.z + (1.0 - depthRatio) * DEPTH_SCALE;
 
-    // (6) スムージング
     if(!posInited){
       smoothedHip.set(targetHipX, targetHipY, targetHipZ);
       posInited = true;
@@ -426,23 +459,20 @@ async function main(){
     }
     B.hips.position.copy(smoothedHip);
 
-    // デバッグ表示
     debugPanel.innerHTML =
       `dx: ${dxImage.toFixed(3)}<br>` +
       `dz(depth): ${(1.0-depthRatio).toFixed(3)}<br>` +
-      `lowest: lm[${lowestIdx}]<br>` +
+      `hip→foot: ${hipToLowestY.toFixed(2)}m<br>` +
       `hipY: ${smoothedHip.y.toFixed(2)}m<br>` +
       `hipX: ${smoothedHip.x.toFixed(2)}m<br>` +
-      `hipZ: ${smoothedHip.z.toFixed(2)}m`;
+      `hipZ: ${smoothedHip.z.toFixed(2)}m<br>` +
+      `ankle vis: L${lAnkleVis?'✓':'✗'} R${rAnkleVis?'✓':'✗'}`;
   }
 
-  // ====== スティック更新 ======
   function updateStick(landmarks, worldLandmarks){
     const wlm = worldLandmarks;
-    // スティックは腰の絶対位置に追従させる
     for(let i=0;i<33;i++){
       const p = lmToVec3(wlm[i], new THREE.Vector3());
-      // 腰中心を 0 として、smoothedHip にオフセット
       const hipMid = new THREE.Vector3(
         (wlm[23].x + wlm[24].x)/2 * 1.0,
         -(wlm[23].y + wlm[24].y)/2,
@@ -462,7 +492,6 @@ async function main(){
     });
   }
 
-  // ====== 推論ループ ======
   let lastVideoTime = -1, lastTs = 0;
   async function detect(){
     if(video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime){
@@ -482,7 +511,6 @@ async function main(){
     }
   }
 
-  // ====== レンダーループ（4分割） ======
   function renderView(cam, x, y, w, h){
     renderer.setViewport(x, y, w, h);
     renderer.setScissor(x, y, w, h);
@@ -498,7 +526,6 @@ async function main(){
     updateOrthoCam(camFront, halfW, halfH);
     updateOrthoCam(camSide,  halfW, halfH);
     updateOrthoCam(camTop,   halfW, halfH);
-    // ラベル配置
     document.getElementById('lbl-front').style.cssText = `left:${halfW+8}px;top:8px`;
     document.getElementById('lbl-side').style.cssText  = `left:8px;top:${halfH+8}px`;
     document.getElementById('lbl-top').style.cssText   = `left:${halfW+8}px;top:${halfH+8}px`;
@@ -512,8 +539,6 @@ async function main(){
     const rect = canvas.parentElement.getBoundingClientRect();
     const halfW = Math.floor(rect.width / 2);
     const halfH = Math.floor(rect.height / 2);
-    // 左上=Perspective 右上=Front 左下=Side 右下=Top
-    // WebGL座標は左下原点なので Y を反転
     renderView(camPersp, 0,       halfH, halfW, halfH);
     renderView(camFront, halfW,   halfH, halfW, halfH);
     renderView(camSide,  0,       0,     halfW, halfH);
