@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Web 3D Motion Capture - 接地&移動対応版</title>
+<title>Web 3D Motion Capture - 走行・胴体・複数人対応版</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script type="importmap">
 {
@@ -17,39 +17,11 @@
 body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:system-ui,-apple-system,sans-serif}
 #canvas-container{position:relative;width:100%;flex:1;background:#0f172a}
 #main-canvas{display:block;width:100%;height:100%}
-
-/* ★ 元動画を小さくPIP表示 */
-#input-video{
-  position:absolute;
-  right:10px;
-  bottom:10px;
-  width:200px;
-  max-width:30vw;
-  height:auto;
-  border:2px solid #60a5fa;
-  border-radius:6px;
-  background:#000;
-  z-index:35;
-  box-shadow:0 4px 12px rgba(0,0,0,.5);
-  object-fit:contain;
-}
-#video-label{
-  position:absolute;
-  right:10px;
-  bottom:10px;
-  background:rgba(59,130,246,.9);
-  color:#fff;
-  font-size:10px;
-  font-weight:bold;
-  padding:2px 6px;
-  border-radius:3px 0 0 0;
-  z-index:36;
-  pointer-events:none;
-}
-
+#input-video{position:absolute;right:10px;bottom:10px;width:220px;max-width:30vw;height:auto;border:2px solid #60a5fa;border-radius:6px;background:#000;z-index:35;box-shadow:0 4px 12px rgba(0,0,0,.5);object-fit:contain}
+#video-label{position:absolute;right:10px;bottom:10px;background:rgba(59,130,246,.9);color:#fff;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 0;z-index:36;pointer-events:none}
 #loading-overlay{position:absolute;inset:0;background:rgba(15,23,42,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:50;padding:20px;text-align:center}
 #error-box{display:none;position:absolute;top:10px;left:10px;right:10px;background:rgba(220,38,38,.95);color:#fff;padding:10px;border-radius:6px;font-size:11px;z-index:60;white-space:pre-wrap;max-height:50vh;overflow:auto}
-#debug-panel{position:absolute;top:60px;right:10px;background:rgba(0,0,0,.6);color:#34d399;font-family:monospace;font-size:10px;padding:6px;border-radius:4px;z-index:40;pointer-events:none;min-width:140px}
+#debug-panel{position:absolute;top:60px;right:10px;background:rgba(0,0,0,.6);color:#34d399;font-family:monospace;font-size:10px;padding:6px;border-radius:4px;z-index:40;pointer-events:none;min-width:160px}
 .view-label{position:absolute;color:#94a3b8;font-size:10px;font-weight:bold;pointer-events:none;z-index:30;background:rgba(0,0,0,.4);padding:2px 6px;border-radius:3px}
 .btn{padding:6px 10px;border-radius:6px;font-size:12px;background:#334155;color:#e2e8f0;border:1px solid #475569;cursor:pointer;transition:all .2s}
 .btn:hover{background:#475569}
@@ -62,14 +34,19 @@ body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:s
 
 <header class="bg-slate-800 border-b border-slate-700 px-3 py-2 flex flex-wrap items-center gap-2">
   <h1 class="text-sm font-bold flex-shrink-0">🎬 3D Motion Capture</h1>
-  <label class="btn flex-shrink-0">
-    📁 動画を選択
-    <input type="file" id="file-input" accept="video/*" class="hidden">
-  </label>
+  <label class="btn flex-shrink-0">📁 動画を選択<input type="file" id="file-input" accept="video/*" class="hidden"></label>
   <div class="flex gap-1 flex-shrink-0">
     <button class="btn active" data-view="avatar">🧍 3D</button>
     <button class="btn" data-view="stick">🦴 骨格</button>
     <button class="btn" data-view="both">🧍🦴 両方</button>
+  </div>
+  <div class="flex gap-1 flex-shrink-0">
+    <label class="text-xs text-gray-400">人数:</label>
+    <select id="num-persons" class="btn">
+      <option value="1">1人</option>
+      <option value="2">2人</option>
+      <option value="3" selected>3人</option>
+    </select>
   </div>
   <button id="reset-btn" class="btn flex-shrink-0">🔄 基準リセット</button>
   <button id="toggle-video-btn" class="btn flex-shrink-0">📹 動画表示</button>
@@ -111,7 +88,7 @@ const videoLabel = document.getElementById('video-label');
 const canvas = document.getElementById('main-canvas');
 
 let currentStep = '初期化前';
-function setStep(label, sub=''){ currentStep=label; statusText.innerText=label; subStatus.innerText=sub; console.log('[STEP]',label,sub); }
+function setStep(label, sub=''){ currentStep=label; statusText.innerText=label; subStatus.innerText=sub; }
 function showError(msg){ errorBox.style.display='block'; errorBox.innerText=`直前ステップ: ${currentStep}\n\n${msg}`; console.error(msg); }
 window.addEventListener('error', e => showError(`window.error: ${e.message} @ ${e.filename}:${e.lineno}`));
 window.addEventListener('unhandledrejection', e => {
@@ -120,7 +97,6 @@ window.addEventListener('unhandledrejection', e => {
   showError(`unhandledrejection: ${msg}\n${e.reason?.stack||''}`);
 });
 
-// ===== 動画表示トグル =====
 let videoVisible = true;
 document.getElementById('toggle-video-btn').addEventListener('click', () => {
   videoVisible = !videoVisible;
@@ -128,49 +104,50 @@ document.getElementById('toggle-video-btn').addEventListener('click', () => {
   videoLabel.style.display = videoVisible ? 'block' : 'none';
 });
 
-// ===== 調整可能パラメータ =====
-const HORIZONTAL_SCALE = 2.5;
-const DEPTH_SCALE      = 1.5;
-const POSE_SMOOTH      = 0.4;
-const POS_SMOOTH       = 0.20;
+// ===== パラメータ =====
+const POSE_SMOOTH      = 0.5;
+const POS_SMOOTH       = 0.25;
 const VISIBILITY_TH    = 0.5;
-const ORTHO_HALF_HEIGHT = 1.3;
+const ORTHO_HALF_HEIGHT = 1.5;
 const ORTHO_CENTER_Y    = 0.9;
-
-// ★ 接地調整パラメータ
-const GROUND_OFFSET    = 0.05;  // 床から少し浮かせる余裕（埋まり防止）
-const MIN_HIP_HEIGHT   = 0.4;   // 腰の最低高さ（しゃがみでもこれ以下にしない）
-const HIP_HEIGHT_SCALE = 1.0;   // 腰高さの倍率（被写体の身長補正）
+const GROUND_OFFSET    = 0.02;
+const MIN_HIP_HEIGHT   = 0.3;
+// ★ 走行対応: 画像横幅を実世界何メートルにマップするか
+// 「画面に映る範囲が約 SCENE_WIDTH メートル」と仮定
+const SCENE_WIDTH      = 8.0;   // 横方向：画面全幅=8m
+const SCENE_DEPTH_RANGE = 6.0;  // 奥行きレンジ
+const MAX_PERSONS      = 3;
 
 async function main(){
-  setStep('手順(1/6): three.js を読み込み中...', '3Dライブラリを取得');
+  setStep('three.js 読み込み中...');
   const THREE = await import('three');
-  setStep('手順(2/6): アドオン読み込み中...', 'OrbitControls / GLTFLoader');
+  setStep('アドオン読み込み中...');
   const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
   const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-  setStep('手順(3/6): MediaPipe を読み込み中...', 'AIエンジンライブラリ');
+  setStep('MediaPipe 読み込み中...');
   const mp = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs');
   const { PoseLandmarker, FilesetResolver } = mp;
 
-  setStep('手順(4/6): 3D空間を準備中...', 'シーン構築');
+  setStep('3D空間構築中...');
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0f172a);
-  scene.fog = new THREE.Fog(0x0f172a, 8, 25);
+  scene.fog = new THREE.Fog(0x0f172a, 10, 30);
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.7));
   const dl = new THREE.DirectionalLight(0xffffff, 1.2);
-  dl.position.set(3, 6, 4); dl.castShadow = true;
-  dl.shadow.mapSize.set(1024,1024);
-  dl.shadow.camera.left=-3; dl.shadow.camera.right=3;
-  dl.shadow.camera.top=3; dl.shadow.camera.bottom=-3;
+  dl.position.set(3, 8, 4); dl.castShadow = true;
+  dl.shadow.mapSize.set(2048,2048);
+  dl.shadow.camera.left=-6; dl.shadow.camera.right=6;
+  dl.shadow.camera.top=6; dl.shadow.camera.bottom=-6;
   scene.add(dl);
 
-  const floorMat = new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.85, metalness:0.1});
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(20,20), floorMat);
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(30,30),
+    new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.85})
+  );
   floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
   scene.add(floor);
-  const grid = new THREE.GridHelper(20, 20, 0x475569, 0x334155);
-  scene.add(grid);
+  scene.add(new THREE.GridHelper(30, 30, 0x475569, 0x334155));
 
   const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -178,14 +155,14 @@ async function main(){
   renderer.setScissorTest(true);
 
   const camPersp = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-  camPersp.position.set(2.5, 1.8, 3.5);
+  camPersp.position.set(4, 3, 6);
   camPersp.lookAt(0, 0.9, 0);
   const camFront = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
-  camFront.position.set(0, ORTHO_CENTER_Y, 5); camFront.lookAt(0, ORTHO_CENTER_Y, 0);
+  camFront.position.set(0, ORTHO_CENTER_Y, 8); camFront.lookAt(0, ORTHO_CENTER_Y, 0);
   const camSide = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
-  camSide.position.set(5, ORTHO_CENTER_Y, 0); camSide.lookAt(0, ORTHO_CENTER_Y, 0);
+  camSide.position.set(8, ORTHO_CENTER_Y, 0); camSide.lookAt(0, ORTHO_CENTER_Y, 0);
   const camTop = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
-  camTop.position.set(0, 8, 0); camTop.lookAt(0, 0, 0); camTop.up.set(0,0,-1);
+  camTop.position.set(0, 12, 0); camTop.lookAt(0, 0, 0); camTop.up.set(0,0,-1);
 
   const controls = new OrbitControls(camPersp, canvas);
   controls.target.set(0, 0.9, 0);
@@ -193,102 +170,146 @@ async function main(){
 
   function updateOrthoCam(cam, w, h){
     const aspect = w / Math.max(h, 1);
-    const halfH = ORTHO_HALF_HEIGHT;
+    const halfH = ORTHO_HALF_HEIGHT * 2;  // 広めに
     const halfW = halfH * aspect;
     cam.left = -halfW; cam.right = halfW;
     cam.top = halfH; cam.bottom = -halfH;
     cam.updateProjectionMatrix();
   }
 
-  setStep('手順(5/6): キャラクターモデル読み込み中...', 'Xbot を取得');
+  setStep('キャラクターモデル読み込み中...');
   const XBOT_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r158/examples/models/gltf/Xbot.glb';
-  const gltf = await new Promise((resolve, reject) => {
-    new GLTFLoader().load(XBOT_URL, resolve, undefined, err => reject(new Error('GLTF読み込み失敗: '+err.message)));
+  const gltfTemplate = await new Promise((resolve, reject) => {
+    new GLTFLoader().load(XBOT_URL, resolve, undefined, err => reject(new Error('GLTF: '+err.message)));
   });
-  const avatar = gltf.scene;
-  avatar.traverse(o => { if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; }});
-  scene.add(avatar);
 
-  const bones = {};
-  avatar.traverse(o => { if(o.isBone) bones[o.name] = o; });
-  console.log('ボーン数:', Object.keys(bones).length);
-  const B = {
-    hips: bones.mixamorigHips,
-    spine: bones.mixamorigSpine,
-    spine1: bones.mixamorigSpine1,
-    spine2: bones.mixamorigSpine2,
-    neck: bones.mixamorigNeck,
-    head: bones.mixamorigHead,
-    lShoulder: bones.mixamorigLeftArm,
-    lElbow: bones.mixamorigLeftForeArm,
-    lWrist: bones.mixamorigLeftHand,
-    rShoulder: bones.mixamorigRightArm,
-    rElbow: bones.mixamorigRightForeArm,
-    rWrist: bones.mixamorigRightHand,
-    lHip: bones.mixamorigLeftUpLeg,
-    lKnee: bones.mixamorigLeftLeg,
-    lAnkle: bones.mixamorigLeftFoot,
-    rHip: bones.mixamorigRightUpLeg,
-    rKnee: bones.mixamorigRightLeg,
-    rAnkle: bones.mixamorigRightFoot,
-  };
-
-  const bindHipsPos = B.hips.position.clone();
-  const bindQuats = {};
-  Object.keys(B).forEach(k => { if(B[k]) bindQuats[k] = B[k].quaternion.clone(); });
-
-  // ★ Xbot本来の腰高さを記録（バインドポーズでの足首から腰までの距離）
-  // mixamorigHips のワールドY位置をバインドポーズで取得
-  avatar.updateMatrixWorld(true);
-  const bindHipWorldPos = new THREE.Vector3();
-  B.hips.getWorldPosition(bindHipWorldPos);
-  const bindLAnkleWorldPos = new THREE.Vector3();
-  B.lAnkle.getWorldPosition(bindLAnkleWorldPos);
-  const XBOT_HIP_TO_FOOT = bindHipWorldPos.y - bindLAnkleWorldPos.y; // 通常 ~0.9m
-  console.log(`Xbot 腰-足首距離: ${XBOT_HIP_TO_FOOT.toFixed(3)}m`);
-
-  const stickGroup = new THREE.Group();
-  scene.add(stickGroup);
-  const joints = [];
-  const jointMat = new THREE.MeshStandardMaterial({color:0xef4444});
-  const jointGeo = new THREE.SphereGeometry(0.025, 12, 12);
-  for(let i=0;i<33;i++){
-    const m = new THREE.Mesh(jointGeo, jointMat);
-    m.castShadow = true;
-    stickGroup.add(m); joints.push(m);
-  }
+  // ★ Person クラス：1人分のアバター+スティック+状態
+  const PERSON_COLORS = [0xef4444, 0x3b82f6, 0x10b981];
   const STICK_BONES = [
     [11,13],[13,15],[12,14],[14,16],
     [11,12],[23,24],[11,23],[12,24],
     [23,25],[25,27],[27,31],
     [24,26],[26,28],[28,32],
   ];
-  const boneMat = new THREE.MeshStandardMaterial({color:0x60a5fa});
-  const sticks = STICK_BONES.map(()=>{
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,1,8), boneMat);
-    m.castShadow = true; stickGroup.add(m); return m;
-  });
-  stickGroup.visible = false;
+  const BIND_DIRS = {
+    lShoulder: new THREE.Vector3(1, 0, 0),
+    lElbow:    new THREE.Vector3(1, 0, 0),
+    rShoulder: new THREE.Vector3(-1, 0, 0),
+    rElbow:    new THREE.Vector3(-1, 0, 0),
+    lHip:      new THREE.Vector3(0, -1, 0),
+    lKnee:     new THREE.Vector3(0, -1, 0),
+    rHip:      new THREE.Vector3(0, -1, 0),
+    rKnee:     new THREE.Vector3(0, -1, 0),
+    // 胴体: 親(腰)→子(spine)はバインドポーズで +Y方向
+    spine:     new THREE.Vector3(0, 1, 0),
+    spine1:    new THREE.Vector3(0, 1, 0),
+    neck:      new THREE.Vector3(0, 1, 0),
+  };
+
+  class Person {
+    constructor(id){
+      this.id = id;
+      this.color = PERSON_COLORS[id % PERSON_COLORS.length];
+      // SkeletonUtils.clone は依存追加が必要なので、毎回ロードした gltf を使う
+      // 簡易策：scene を clone (アニメは無いので OK)
+      this.avatar = gltfTemplate.scene.clone(true);
+      this.avatar.traverse(o => {
+        if(o.isMesh){
+          o.castShadow = true;
+          o.receiveShadow = true;
+          // 個別マテリアル化して色付け
+          if(o.material){
+            o.material = o.material.clone();
+            if(o.material.color) o.material.color.setHex(this.color);
+          }
+        }
+      });
+      scene.add(this.avatar);
+
+      this.bones = {};
+      this.avatar.traverse(o => { if(o.isBone) this.bones[o.name] = o; });
+      const bn = this.bones;
+      this.B = {
+        hips: bn.mixamorigHips,
+        spine: bn.mixamorigSpine,
+        spine1: bn.mixamorigSpine1,
+        spine2: bn.mixamorigSpine2,
+        neck: bn.mixamorigNeck,
+        head: bn.mixamorigHead,
+        lShoulder: bn.mixamorigLeftArm,
+        lElbow: bn.mixamorigLeftForeArm,
+        rShoulder: bn.mixamorigRightArm,
+        rElbow: bn.mixamorigRightForeArm,
+        lHip: bn.mixamorigLeftUpLeg,
+        lKnee: bn.mixamorigLeftLeg,
+        lAnkle: bn.mixamorigLeftFoot,
+        rHip: bn.mixamorigRightUpLeg,
+        rKnee: bn.mixamorigRightLeg,
+        rAnkle: bn.mixamorigRightFoot,
+      };
+      this.bindHipsPos = this.B.hips.position.clone();
+      this.avatar.updateMatrixWorld(true);
+      const hp = new THREE.Vector3(); this.B.hips.getWorldPosition(hp);
+      const ap = new THREE.Vector3(); this.B.lAnkle.getWorldPosition(ap);
+      this.xbotHipToFoot = hp.y - ap.y;
+
+      // スティック
+      this.stickGroup = new THREE.Group();
+      scene.add(this.stickGroup);
+      this.joints = [];
+      const jMat = new THREE.MeshStandardMaterial({color:this.color});
+      const jGeo = new THREE.SphereGeometry(0.025, 12, 12);
+      for(let i=0;i<33;i++){
+        const m = new THREE.Mesh(jGeo, jMat);
+        m.castShadow = true;
+        this.stickGroup.add(m); this.joints.push(m);
+      }
+      const bMat = new THREE.MeshStandardMaterial({color:0x60a5fa});
+      this.sticks = STICK_BONES.map(()=>{
+        const m = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,1,8), bMat);
+        m.castShadow = true; this.stickGroup.add(m); return m;
+      });
+
+      // 状態
+      this.smoothedHip = new THREE.Vector3();
+      this.posInited = false;
+      this.active = false;
+      this.lastPx = 0;  // トラッキング用
+      this.lastPy = 0;
+    }
+    setVisible(showAvatar, showStick){
+      this.avatar.visible = this.active && showAvatar;
+      this.stickGroup.visible = this.active && showStick;
+    }
+  }
+
+  const persons = [];
+  for(let i=0;i<MAX_PERSONS;i++) persons.push(new Person(i));
 
   let viewMode = 'avatar';
+  function refreshVisibility(){
+    const sa = (viewMode === 'avatar' || viewMode === 'both');
+    const ss = (viewMode === 'stick' || viewMode === 'both');
+    persons.forEach(p => p.setVisible(sa, ss));
+  }
   document.querySelectorAll('[data-view]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('[data-view]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       viewMode = btn.dataset.view;
-      avatar.visible = (viewMode === 'avatar' || viewMode === 'both');
-      stickGroup.visible = (viewMode === 'stick' || viewMode === 'both');
+      refreshVisibility();
     });
   });
 
-  setStep('手順(6/6): AIエンジン初期化中...', 'WASM環境準備');
+  setStep('AIエンジン初期化中...');
   const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm');
-  setStep('AIモデルをダウンロード中...', '約7MB');
+  setStep('AIモデルダウンロード中...');
   progressContainer.classList.remove('hidden');
-  const modelUrl = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+  const modelUrl = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
+  // ★ full モデル（精度高め）に変更。lite より重いが胴体・複数人検出が安定
   const res = await fetch(modelUrl);
   const reader = res.body.getReader();
-  const total = parseInt(res.headers.get('content-length')||'7000000', 10);
+  const total = parseInt(res.headers.get('content-length')||'12000000', 10);
   let received = 0; const chunks = [];
   while(true){
     const {done, value} = await reader.read();
@@ -300,20 +321,33 @@ async function main(){
   let off=0; for(const c of chunks){ buf.set(c, off); off+=c.length; }
   progressContainer.classList.add('hidden');
 
-  setStep('最終調整中...', 'モデル起動');
+  let numPosesWanted = parseInt(document.getElementById('num-persons').value, 10);
   let poseLandmarker;
-  try {
-    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-      baseOptions:{modelAssetBuffer:buf, delegate:'GPU'},
-      runningMode:'VIDEO', numPoses:1
-    });
-  } catch(gpuErr) {
-    console.warn('GPU失敗、CPU再試行', gpuErr);
-    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-      baseOptions:{modelAssetBuffer:buf, delegate:'CPU'},
-      runningMode:'VIDEO', numPoses:1
-    });
+  async function createPoseLandmarker(numPoses){
+    if(poseLandmarker){ poseLandmarker.close(); }
+    try {
+      poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions:{modelAssetBuffer:buf, delegate:'GPU'},
+        runningMode:'VIDEO', numPoses
+      });
+    } catch(e) {
+      poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions:{modelAssetBuffer:buf, delegate:'CPU'},
+        runningMode:'VIDEO', numPoses
+      });
+    }
   }
+  await createPoseLandmarker(numPosesWanted);
+  document.getElementById('num-persons').addEventListener('change', async e => {
+    numPosesWanted = parseInt(e.target.value, 10);
+    setStep('検出器を再構築中...');
+    await createPoseLandmarker(numPosesWanted);
+    overlay.style.display = 'none';
+    // 全員リセット
+    persons.forEach(p => { p.active = false; p.posInited = false; });
+    refreshVisibility();
+  });
+
   overlay.style.display = 'none';
   footerInfo.innerText = '✓ 準備完了。動画を選択してください。';
 
@@ -321,49 +355,83 @@ async function main(){
     const f = e.target.files[0]; if(!f) return;
     if(video.src) URL.revokeObjectURL(video.src);
     video.src = URL.createObjectURL(f);
-    baselineSet = false; posInited = false;
+    persons.forEach(p => { p.active = false; p.posInited = false; });
+    refreshVisibility();
     lastTs = 0; lastVideoTime = -1;
-    video.play().catch(err => console.warn('play失敗', err));
+    baselineHeightPx = 0;
+    video.play().catch(()=>{});
     footerInfo.innerText = `▶ 解析中: ${f.name}`;
   });
   document.getElementById('reset-btn').addEventListener('click', () => {
-    baselineSet = false; posInited = false;
+    persons.forEach(p => { p.posInited = false; });
+    baselineHeightPx = 0;
     footerInfo.innerText = '🔄 基準リセット完了';
   });
 
-  const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
-  const tmpQ = new THREE.Quaternion();
-  const UP = new THREE.Vector3(0,1,0);
-
+  // ===== 姿勢適用ロジック =====
   function lmToVec3(lm, out){ out.set(lm.x, -lm.y, -lm.z); return out; }
 
-  function setBoneDirection(bone, dirWorld, bindDirLocal){
+  function setBoneDirection(bone, dirWorld, bindDirLocal, smooth=POSE_SMOOTH){
     if(!bone || !bone.parent) return;
     const parentQ = new THREE.Quaternion();
     bone.parent.getWorldQuaternion(parentQ);
     const dirLocal = dirWorld.clone().applyQuaternion(parentQ.invert());
     const q = new THREE.Quaternion().setFromUnitVectors(bindDirLocal, dirLocal.normalize());
-    bone.quaternion.slerp(q, POSE_SMOOTH);
+    bone.quaternion.slerp(q, smooth);
   }
 
-  const BIND_DIRS = {
-    lShoulder: new THREE.Vector3(1, 0, 0),
-    lElbow:    new THREE.Vector3(1, 0, 0),
-    rShoulder: new THREE.Vector3(-1, 0, 0),
-    rElbow:    new THREE.Vector3(-1, 0, 0),
-    lHip:      new THREE.Vector3(0, -1, 0),
-    lKnee:     new THREE.Vector3(0, -1, 0),
-    rHip:      new THREE.Vector3(0, -1, 0),
-    rKnee:     new THREE.Vector3(0, -1, 0),
-  };
+  // ★ 胴体・腰の向きを設定
+  // 戦略: 腰(hips)の向きを「両肩を結ぶ線 + 両腰を結ぶ線」から作った座標系で決める
+  function applyTorsoRotation(person, wlm){
+    const B = person.B;
+    // 肩・腰のワールド座標(MediaPipe→Three系)
+    const lSh = lmToVec3(wlm[11], new THREE.Vector3());
+    const rSh = lmToVec3(wlm[12], new THREE.Vector3());
+    const lHp = lmToVec3(wlm[23], new THREE.Vector3());
+    const rHp = lmToVec3(wlm[24], new THREE.Vector3());
+    const hipMid = lHp.clone().add(rHp).multiplyScalar(0.5);
+    const shMid  = lSh.clone().add(rSh).multiplyScalar(0.5);
 
-  function applyPose(landmarks, worldLandmarks){
+    // 腰の座標系
+    // up:  hip→shoulder
+    // right: rHip→lHip (Mixamoでは左がモデルの左=ワールドX+方向と一致するよう)
+    const up = shMid.clone().sub(hipMid).normalize();
+    const right = lHp.clone().sub(rHp).normalize();
+    // 直交化
+    const forward = new THREE.Vector3().crossVectors(right, up).normalize();
+    right.crossVectors(up, forward).normalize();
+    
+    const m = new THREE.Matrix4().makeBasis(right, up, forward);
+    const targetQ = new THREE.Quaternion().setFromRotationMatrix(m);
+    // 腰は親(avatar root)が単位回転なのでそのまま代入
+    B.hips.quaternion.slerp(targetQ, POSE_SMOOTH);
+
+    // 胴体上部(spine→shoulderMid): hips の up と spine→neck の方向の差で曲げる
+    // spine の bind方向 = +Y (親hipsのローカル)
+    // ターゲット = hipMid→shMid の方向を、hipsローカル空間で表す
+    if(B.spine){
+      const dirWorld = shMid.clone().sub(hipMid).normalize();
+      setBoneDirection(B.spine, dirWorld, BIND_DIRS.spine, POSE_SMOOTH * 0.5);
+    }
+    // 首
+    if(B.neck && wlm[0]){
+      const nose = lmToVec3(wlm[0], new THREE.Vector3());
+      const dirWorld = nose.clone().sub(shMid).normalize();
+      setBoneDirection(B.neck, dirWorld, BIND_DIRS.neck, POSE_SMOOTH * 0.4);
+    }
+  }
+
+  function applyPose(person, landmarks, worldLandmarks){
     const wlm = worldLandmarks;
+    const B = person.B;
     function worldDir(fromIdx, toIdx){
       const a = lmToVec3(wlm[fromIdx], new THREE.Vector3());
       const b = lmToVec3(wlm[toIdx], new THREE.Vector3());
       return b.sub(a).normalize();
     }
+    // ★ 胴体を先に適用（親→子の順）
+    applyTorsoRotation(person, wlm);
+    // 手足
     setBoneDirection(B.lShoulder, worldDir(11,13), BIND_DIRS.lShoulder);
     setBoneDirection(B.lElbow,    worldDir(13,15), BIND_DIRS.lElbow);
     setBoneDirection(B.rShoulder, worldDir(12,14), BIND_DIRS.rShoulder);
@@ -374,136 +442,188 @@ async function main(){
     setBoneDirection(B.rKnee,  worldDir(26,28), BIND_DIRS.rKnee);
   }
 
-  // ====== 接地&移動ロジック（修正版） ======
-  let baselineSet = false;
-  let baselineHipX = 0.5, baselineShoulderWidth = 0.2, subjectHeight = 1.7;
-  let posInited = false;
-  let smoothedHip = new THREE.Vector3();
+  // ★ 走行対応の位置推定
+  // 基準: 「画面に映った被写体のピクセル身長」と「実身長(推定)」の比から距離(奥行き)を出し、
+  //  画像座標と組み合わせて 3D 位置を算出
+  let baselineHeightPx = 0;  // 起動直後の被写体ピクセル身長
+  const REF_DISTANCE = 4.0;  // 基準時の被写体距離(m)
+  const ASSUMED_HEIGHT = 1.7; // 推定身長(m)
 
   function vis(lm, idx){ return (lm[idx].visibility ?? 1) > VISIBILITY_TH; }
 
-  function updateHipPosition(landmarks, worldLandmarks){
+  function updateHipPosition(person, landmarks, worldLandmarks){
     const lm = landmarks, wlm = worldLandmarks;
 
-    if(!baselineSet){
-      baselineHipX = (lm[23].x + lm[24].x) / 2;
-      baselineShoulderWidth = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y);
-      const headY  = wlm[0].y;
-      const ankleY = (wlm[27].y + wlm[28].y) / 2;
-      subjectHeight = Math.max(0.5, Math.abs(headY - ankleY));
-      baselineSet = true;
-      console.log(`基準設定: hipX=${baselineHipX.toFixed(3)}, shW=${baselineShoulderWidth.toFixed(3)}, H=${subjectHeight.toFixed(2)}m`);
-    }
-
-    // ★ 修正版 接地ロジック
-    // worldLandmarks は腰中心を原点とした実寸(m)、Y軸は下が正。
-    // Three.js座標系では Y上が正なので、最終的に符号を反転する。
-    //
-    // 各ランドマークの「腰中心からの下方向距離」= wlm[i].y (Y下が正なのでそのまま)
-    // → 最も下にある(=yが最大)ランドマークが「接地候補」
-    
-    // 足首を最優先、可視性が低ければ膝、それも無ければ腰自身を基準にする
-    const lAnkleVis = vis(lm, 27);
-    const rAnkleVis = vis(lm, 28);
-    const lKneeVis  = vis(lm, 25);
-    const rKneeVis  = vis(lm, 26);
-    
-    const hipMidY = (wlm[23].y + wlm[24].y) / 2;
-    
-    // 「腰中心から下方向への距離」を計算（正の値）
-    let hipToLowestY;
+    // (A) 接地: 腰→足首の実距離(worldLandmarks)
+    const lAnkleVis = vis(lm, 27), rAnkleVis = vis(lm, 28);
+    const lKneeVis  = vis(lm, 25), rKneeVis  = vis(lm, 26);
+    const hipMidYw = (wlm[23].y + wlm[24].y) / 2;
+    let hipToFoot;
     if(lAnkleVis || rAnkleVis){
-      // 両足首が見えていれば、より低い(yが大きい)ほうを採用
-      let ankleY;
-      if(lAnkleVis && rAnkleVis) ankleY = Math.max(wlm[27].y, wlm[28].y);
-      else if(lAnkleVis) ankleY = wlm[27].y;
-      else ankleY = wlm[28].y;
-      hipToLowestY = ankleY - hipMidY;
+      let aY;
+      if(lAnkleVis && rAnkleVis) aY = Math.max(wlm[27].y, wlm[28].y);
+      else aY = lAnkleVis ? wlm[27].y : wlm[28].y;
+      hipToFoot = aY - hipMidYw;
     } else if(lKneeVis || rKneeVis){
-      // 足首が見えなければ膝で代用し、膝-足首の標準長を足す（約0.45m）
-      let kneeY;
-      if(lKneeVis && rKneeVis) kneeY = Math.max(wlm[25].y, wlm[26].y);
-      else if(lKneeVis) kneeY = wlm[25].y;
-      else kneeY = wlm[26].y;
-      hipToLowestY = (kneeY - hipMidY) + 0.45;
+      let kY;
+      if(lKneeVis && rKneeVis) kY = Math.max(wlm[25].y, wlm[26].y);
+      else kY = lKneeVis ? wlm[25].y : wlm[26].y;
+      hipToFoot = (kY - hipMidYw) + 0.45;
     } else {
-      // 何も見えなければXbotのバインド値を使う
-      hipToLowestY = XBOT_HIP_TO_FOOT;
+      hipToFoot = person.xbotHipToFoot;
     }
-    
-    // 異常値ガード（負や極端な値を補正）
-    hipToLowestY = Math.max(0.1, hipToLowestY);
+    hipToFoot = Math.max(0.1, hipToFoot);
 
-    // ★ 腰のY座標 = 床(0) + 足から腰までの距離 + 床からの余裕
-    let targetHipY = hipToLowestY * HIP_HEIGHT_SCALE + GROUND_OFFSET;
-    // 最低高さを保証（極端なしゃがみで埋まらないように）
-    targetHipY = Math.max(targetHipY, MIN_HIP_HEIGHT);
+    // (B) 被写体ピクセル身長: nose(0) と 足首中央
+    const headYn = lm[0].y;
+    let footYn;
+    if(lAnkleVis && rAnkleVis) footYn = (lm[27].y + lm[28].y) / 2;
+    else if(lAnkleVis) footYn = lm[27].y;
+    else if(rAnkleVis) footYn = lm[28].y;
+    else footYn = (lm[25].y + lm[26].y) / 2;  // 膝で代用
+    const heightPx = Math.max(0.05, footYn - headYn); // 正規化座標(0-1)
 
-    // 水平移動
-    const currentHipX = (lm[23].x + lm[24].x) / 2;
-    const dxImage = currentHipX - baselineHipX;
-    const targetHipX = bindHipsPos.x + dxImage * HORIZONTAL_SCALE;
+    if(baselineHeightPx === 0 && lAnkleVis && rAnkleVis){
+      baselineHeightPx = heightPx;
+    }
+    const refH = baselineHeightPx > 0 ? baselineHeightPx : heightPx;
 
-    // 奥行きZ
-    const currentShW = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y);
-    const depthRatio = baselineShoulderWidth / Math.max(currentShW, 0.01);
-    const targetHipZ = bindHipsPos.z + (1.0 - depthRatio) * DEPTH_SCALE;
+    // (C) 奥行きZ: ピクセル身長の逆数比例
+    const distance = REF_DISTANCE * (refH / heightPx);
+    // 基準距離から手前(+Z)/奥(-Z)
+    const targetHipZ = REF_DISTANCE - distance;
 
-    if(!posInited){
-      smoothedHip.set(targetHipX, targetHipY, targetHipZ);
-      posInited = true;
+    // (D) 水平X: 画像の足元X位置 → 距離に応じた実水平幅で換算
+    // 画面横幅は、その距離での視野幅 ≒ SCENE_WIDTH * (distance/REF_DISTANCE)
+    const footXn = (lAnkleVis && rAnkleVis) ? (lm[27].x + lm[28].x)/2 :
+                   lAnkleVis ? lm[27].x : rAnkleVis ? lm[28].x : (lm[23].x + lm[24].x)/2;
+    const widthAtDist = SCENE_WIDTH * (distance / REF_DISTANCE);
+    const targetHipX = (footXn - 0.5) * widthAtDist;
+
+    // (E) 腰のY = 床(0) + 腰高さ
+    const targetHipY = hipToFoot + GROUND_OFFSET;
+
+    const target = new THREE.Vector3(targetHipX, Math.max(MIN_HIP_HEIGHT, targetHipY), targetHipZ);
+
+    if(!person.posInited){
+      person.smoothedHip.copy(target);
+      person.posInited = true;
     } else {
-      smoothedHip.x += (targetHipX - smoothedHip.x) * POS_SMOOTH;
-      smoothedHip.y += (targetHipY - smoothedHip.y) * POS_SMOOTH;
-      smoothedHip.z += (targetHipZ - smoothedHip.z) * POS_SMOOTH;
+      person.smoothedHip.lerp(target, POS_SMOOTH);
     }
-    B.hips.position.copy(smoothedHip);
-
-    debugPanel.innerHTML =
-      `dx: ${dxImage.toFixed(3)}<br>` +
-      `dz(depth): ${(1.0-depthRatio).toFixed(3)}<br>` +
-      `hip→foot: ${hipToLowestY.toFixed(2)}m<br>` +
-      `hipY: ${smoothedHip.y.toFixed(2)}m<br>` +
-      `hipX: ${smoothedHip.x.toFixed(2)}m<br>` +
-      `hipZ: ${smoothedHip.z.toFixed(2)}m<br>` +
-      `ankle vis: L${lAnkleVis?'✓':'✗'} R${rAnkleVis?'✓':'✗'}`;
+    person.B.hips.position.copy(person.smoothedHip);
   }
 
-  function updateStick(landmarks, worldLandmarks){
+  function updateStick(person, landmarks, worldLandmarks){
     const wlm = worldLandmarks;
+    const UP = new THREE.Vector3(0,1,0);
     for(let i=0;i<33;i++){
       const p = lmToVec3(wlm[i], new THREE.Vector3());
       const hipMid = new THREE.Vector3(
-        (wlm[23].x + wlm[24].x)/2 * 1.0,
+        (wlm[23].x + wlm[24].x)/2,
         -(wlm[23].y + wlm[24].y)/2,
         -(wlm[23].z + wlm[24].z)/2,
       );
-      p.sub(hipMid).add(smoothedHip);
-      joints[i].position.copy(p);
+      p.sub(hipMid).add(person.smoothedHip);
+      person.joints[i].position.copy(p);
     }
     STICK_BONES.forEach(([a,b], i) => {
-      const pa = joints[a].position, pb = joints[b].position;
+      const pa = person.joints[a].position, pb = person.joints[b].position;
       const mid = pa.clone().add(pb).multiplyScalar(0.5);
       const dir = pb.clone().sub(pa);
       const len = dir.length();
-      sticks[i].position.copy(mid);
-      sticks[i].scale.set(1, len, 1);
-      sticks[i].quaternion.setFromUnitVectors(UP, dir.normalize());
+      person.sticks[i].position.copy(mid);
+      person.sticks[i].scale.set(1, len, 1);
+      person.sticks[i].quaternion.setFromUnitVectors(UP, dir.normalize());
     });
   }
 
+  // ★ MediaPipe結果と Person のひも付け（簡易IDトラッキング）
+  // 前フレームの位置に最も近い人物を対応付け
+  function assignPersons(results){
+    // results: { landmarks: [...], worldLandmarks: [...] }
+    const numFound = results.landmarks?.length || 0;
+    // 各検出結果の代表座標(腰中央のx,y画像座標)
+    const detPos = [];
+    for(let i=0;i<numFound;i++){
+      const lm = results.landmarks[i];
+      detPos.push({ x:(lm[23].x+lm[24].x)/2, y:(lm[23].y+lm[24].y)/2, i });
+    }
+    // 既に active な person との対応をグリーディに
+    const usedDet = new Set();
+    const usedPer = new Set();
+    const activePersons = persons.filter(p => p.active);
+    // 距離ペア
+    const pairs = [];
+    activePersons.forEach(p => {
+      detPos.forEach(d => {
+        const dx = p.lastPx - d.x, dy = p.lastPy - d.y;
+        pairs.push({ dist: dx*dx+dy*dy, p, d });
+      });
+    });
+    pairs.sort((a,b) => a.dist - b.dist);
+    const assignments = []; // [{person, detIdx}]
+    for(const pair of pairs){
+      if(usedDet.has(pair.d.i) || usedPer.has(pair.p.id)) continue;
+      if(pair.dist > 0.15*0.15) continue; // 大きく離れていたら同一視しない
+      assignments.push({ person: pair.p, detIdx: pair.d.i });
+      usedDet.add(pair.d.i); usedPer.add(pair.p.id);
+    }
+    // 残った検出を非アクティブな person に割り当て
+    for(const d of detPos){
+      if(usedDet.has(d.i)) continue;
+      const freeP = persons.find(p => !usedPer.has(p.id));
+      if(!freeP) break;
+      freeP.active = true;
+      freeP.posInited = false; // 新規なので初期化
+      assignments.push({ person: freeP, detIdx: d.i });
+      usedDet.add(d.i); usedPer.add(freeP.id);
+    }
+    // 検出から外れた person は非アクティブ化
+    persons.forEach(p => {
+      if(!usedPer.has(p.id)){
+        p.active = false;
+      }
+    });
+    // 代表位置を更新
+    assignments.forEach(({person, detIdx}) => {
+      const lm = results.landmarks[detIdx];
+      person.lastPx = (lm[23].x+lm[24].x)/2;
+      person.lastPy = (lm[23].y+lm[24].y)/2;
+    });
+    return assignments;
+  }
+
   let lastVideoTime = -1, lastTs = 0;
-  async function detect(){
+  function detect(){
     if(video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime){
       lastVideoTime = video.currentTime;
       const ts = Math.max(lastTs + 1, Math.round(performance.now()));
       lastTs = ts;
       try {
         const result = poseLandmarker.detectForVideo(video, ts);
-        if(result.landmarks && result.landmarks.length > 0 && result.worldLandmarks && result.worldLandmarks.length > 0){
-          applyPose(result.landmarks[0], result.worldLandmarks[0]);
-          updateHipPosition(result.landmarks[0], result.worldLandmarks[0]);
-          updateStick(result.landmarks[0], result.worldLandmarks[0]);
+        if(result.landmarks && result.landmarks.length > 0){
+          const assignments = assignPersons(result);
+          assignments.forEach(({person, detIdx}) => {
+            const lm = result.landmarks[detIdx];
+            const wlm = result.worldLandmarks[detIdx];
+            applyPose(person, lm, wlm);
+            updateHipPosition(person, lm, wlm);
+            updateStick(person, lm, wlm);
+          });
+          refreshVisibility();
+          // デバッグ
+          const active = persons.filter(p => p.active);
+          debugPanel.innerHTML =
+            `検出: ${result.landmarks.length}人 / 最大${numPosesWanted}<br>` +
+            `アクティブ: ${active.length}人<br>` +
+            active.map(p =>
+              `P${p.id}: x=${p.smoothedHip.x.toFixed(1)} y=${p.smoothedHip.y.toFixed(2)} z=${p.smoothedHip.z.toFixed(1)}`
+            ).join('<br>') +
+            `<br>basePx: ${baselineHeightPx.toFixed(3)}`;
+        } else {
+          persons.forEach(p => p.active = false);
+          refreshVisibility();
         }
       } catch(err){
         console.warn('detect失敗', err);
@@ -533,8 +653,8 @@ async function main(){
   resize();
   window.addEventListener('resize', resize);
 
-  async function loop(){
-    await detect();
+  function loop(){
+    detect();
     controls.update();
     const rect = canvas.parentElement.getBoundingClientRect();
     const halfW = Math.floor(rect.width / 2);
