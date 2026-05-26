@@ -1,619 +1,529 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>3D Motion AI</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
-        }
-    }
-    </script>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #121212; touch-action: none; }
-        .view-label {
-            position: absolute;
-            font: 10px/1.2 ui-monospace, monospace;
-            color: #9ca3af;
-            background: rgba(0,0,0,0.5);
-            padding: 2px 6px; border-radius: 3px;
-            pointer-events: none;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Web 3D Motion Capture - 接地&移動対応版</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+body{margin:0;overflow:hidden;background:#0f172a;touch-action:none;font-family:system-ui,-apple-system,sans-serif}
+#canvas-container{position:relative;width:100%;flex:1;background:#0f172a}
+#main-canvas{display:block;width:100%;height:100%}
+#input-video{display:none}
+#loading-overlay{position:absolute;inset:0;background:rgba(15,23,42,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:50;padding:20px;text-align:center}
+#error-box{display:none;position:absolute;top:10px;left:10px;right:10px;background:rgba(220,38,38,.95);color:#fff;padding:10px;border-radius:6px;font-size:11px;z-index:60;white-space:pre-wrap;max-height:50vh;overflow:auto}
+#debug-panel{position:absolute;top:60px;right:10px;background:rgba(0,0,0,.6);color:#34d399;font-family:monospace;font-size:10px;padding:6px;border-radius:4px;z-index:40;pointer-events:none;min-width:140px}
+.view-label{position:absolute;color:#94a3b8;font-size:10px;font-weight:bold;pointer-events:none;z-index:30;background:rgba(0,0,0,.4);padding:2px 6px;border-radius:3px}
+.btn{padding:6px 10px;border-radius:6px;font-size:12px;background:#334155;color:#e2e8f0;border:1px solid #475569;cursor:pointer;transition:all .2s}
+.btn:hover{background:#475569}
+.btn.active{background:#3b82f6;border-color:#60a5fa;color:#fff}
+.progress-bar{width:280px;height:8px;background:#334155;border-radius:4px;overflow:hidden;margin-top:8px}
+.progress-fill{height:100%;background:linear-gradient(90deg,#3b82f6,#60a5fa);transition:width .2s;width:0%}
+</style>
 </head>
-<body class="text-gray-200 h-screen flex flex-col font-sans">
+<body class="text-gray-200 h-screen flex flex-col">
 
-    <header class="p-3 md:p-4 bg-[#1e1e1e] border-b border-[#333] flex justify-between items-center z-10 shadow-md">
-        <h1 class="text-base md:text-xl font-bold tracking-wider text-blue-400">3D MOTION AI</h1>
-        <div class="flex items-center gap-2 flex-wrap">
-            <div class="flex gap-1 text-xs">
-                <button data-mode="model" class="view-btn px-2 py-1 rounded bg-blue-600 text-white">3D</button>
-                <button data-mode="stick" class="view-btn px-2 py-1 rounded bg-gray-700 text-gray-200">骨格</button>
-                <button data-mode="both"  class="view-btn px-2 py-1 rounded bg-gray-700 text-gray-200">両方</button>
-            </div>
-            <input type="file" id="video-upload" accept="video/mp4,video/mov,video/webm" class="hidden">
-            <button id="upload-btn" disabled class="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-400 text-sm md:text-base px-3 py-2 rounded-full font-semibold transition-colors shadow">
-                動画を選択
-            </button>
-        </div>
-    </header>
+<header class="bg-slate-800 border-b border-slate-700 px-3 py-2 flex flex-wrap items-center gap-2">
+  <h1 class="text-sm font-bold flex-shrink-0">🎬 3D Motion Capture</h1>
+  <label class="btn flex-shrink-0">
+    📁 動画を選択
+    <input type="file" id="file-input" accept="video/*" class="hidden">
+  </label>
+  <div class="flex gap-1 flex-shrink-0">
+    <button class="btn active" data-view="avatar">🧍 3D</button>
+    <button class="btn" data-view="stick">🦴 骨格</button>
+    <button class="btn" data-view="both">🧍🦴 両方</button>
+  </div>
+  <button id="reset-btn" class="btn flex-shrink-0">🔄 基準リセット</button>
+</header>
 
-    <div class="flex-1 flex flex-col p-2 gap-2 overflow-hidden bg-[#0a0a0a]">
-        <div class="flex-1 bg-black rounded-lg border border-[#333] relative overflow-hidden flex justify-center items-center shadow-lg">
-            <video id="input-video" class="max-h-full max-w-full object-contain" controls loop playsinline muted></video>
+<div id="canvas-container">
+  <canvas id="main-canvas"></canvas>
+  <video id="input-video" playsinline muted></video>
+  <div class="view-label" style="left:8px;top:8px">PERSPECTIVE</div>
+  <div class="view-label" id="lbl-front">FRONT</div>
+  <div class="view-label" id="lbl-side">SIDE</div>
+  <div class="view-label" id="lbl-top">TOP</div>
+  <div id="debug-panel">待機中...</div>
+  <div id="error-box"></div>
+  <div id="loading-overlay">
+    <div class="text-lg font-bold mb-2">🤖 AIの準備をしています</div>
+    <div id="status-text" class="text-sm text-gray-300">初期化中...</div>
+    <div id="sub-status" class="text-xs text-gray-500 mt-1">&nbsp;</div>
+    <div id="progress-container" class="progress-bar hidden"><div id="progress-fill" class="progress-fill"></div></div>
+  </div>
+</div>
 
-            <div id="overlay" class="absolute inset-0 bg-[#111] bg-opacity-95 flex flex-col items-center justify-center z-10 transition-opacity duration-500 p-6 text-center">
-                <div id="spinner" class="animate-spin rounded-full h-10 w-10 border-4 border-gray-600 border-t-blue-500 mb-4"></div>
-                <p id="status-text" class="text-base md:text-lg font-medium tracking-wide">起動中...</p>
-                <p id="sub-status" class="text-xs md:text-sm text-gray-400 mt-2 mb-4">しばらくお待ちください</p>
+<footer class="bg-slate-800 border-t border-slate-700 px-3 py-1 text-xs text-gray-400">
+  <span id="footer-info">準備完了後に動画を選択してください</span>
+</footer>
 
-                <div id="progress-container" class="w-full max-w-xs hidden">
-                    <div class="w-full bg-gray-700 rounded-full h-2.5 mb-1 overflow-hidden">
-                        <div id="progress-bar" class="bg-blue-500 h-2.5 rounded-full transition-all duration-200" style="width: 0%"></div>
-                    </div>
-                    <p id="progress-text" class="text-sm font-bold text-blue-400">0%</p>
-                </div>
+<script type="module">
+const statusText = document.getElementById('status-text');
+const subStatus = document.getElementById('sub-status');
+const overlay = document.getElementById('loading-overlay');
+const errorBox = document.getElementById('error-box');
+const progressContainer = document.getElementById('progress-container');
+const progressFill = document.getElementById('progress-fill');
+const debugPanel = document.getElementById('debug-panel');
+const footerInfo = document.getElementById('footer-info');
+const video = document.getElementById('input-video');
+const canvas = document.getElementById('main-canvas');
 
-                <div id="error-box" class="hidden mt-4 p-3 bg-red-900/40 border border-red-500/50 rounded text-red-200 text-xs text-left w-full max-w-md break-all overflow-y-auto max-h-48 whitespace-pre-wrap"></div>
-            </div>
-        </div>
+let currentStep = '初期化前';
+function setStep(label, sub=''){ currentStep=label; statusText.innerText=label; subStatus.innerText=sub; console.log('[STEP]',label,sub); }
+function showError(msg){ errorBox.style.display='block'; errorBox.innerText=`直前ステップ: ${currentStep}\n\n${msg}`; console.error(msg); }
+window.addEventListener('error', e => showError(`window.error: ${e.message} @ ${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', e => {
+  const msg = e.reason?.message || String(e.reason||'');
+  if(msg.includes('message channel closed') || msg.includes('listener indicated')) return;
+  showError(`unhandledrejection: ${msg}\n${e.reason?.stack||''}`);
+});
 
-        <div id="canvas-container" class="flex-1 bg-[#1a1a1a] rounded-lg border border-[#333] relative overflow-hidden shadow-lg">
-            <div id="label-perspective" class="view-label">PERSPECTIVE</div>
-            <div id="label-front" class="view-label">FRONT</div>
-            <div id="label-side"  class="view-label">SIDE</div>
-            <div id="label-top"   class="view-label">TOP</div>
-            <div class="absolute bottom-2 right-2 bg-black/60 backdrop-blur px-2 py-1 text-[10px] text-gray-300 rounded border border-gray-700 pointer-events-none z-10">
-                左上ビュー: スワイプで回転
-            </div>
-        </div>
-    </div>
+// ===== 調整可能パラメータ =====
+const HORIZONTAL_SCALE = 2.5;   // 水平移動倍率（標準）
+const DEPTH_SCALE      = 1.5;   // 奥行き移動倍率
+const POSE_SMOOTH      = 0.4;   // 姿勢スムージング(0-1)
+const POS_SMOOTH       = 0.20;  // 位置スムージング(0-1)
+const VISIBILITY_TH    = 0.5;   // 可視性しきい値
+const ORTHO_HALF_HEIGHT = 1.3;  // 三面図の縦半幅
+const ORTHO_CENTER_Y    = 0.9;  // 三面図カメラの注視点Y
 
-    <script type="module">
-        const video = document.getElementById('input-video');
-        const canvasContainer = document.getElementById('canvas-container');
-        const uploadBtn = document.getElementById('upload-btn');
-        const videoUpload = document.getElementById('video-upload');
-        const overlay = document.getElementById('overlay');
-        const spinner = document.getElementById('spinner');
-        const statusText = document.getElementById('status-text');
-        const subStatus = document.getElementById('sub-status');
-        const progressContainer = document.getElementById('progress-container');
-        const progressBar = document.getElementById('progress-bar');
-        const progressText = document.getElementById('progress-text');
-        const errorBox = document.getElementById('error-box');
-        const labelPerspective = document.getElementById('label-perspective');
-        const labelFront = document.getElementById('label-front');
-        const labelSide = document.getElementById('label-side');
-        const labelTop = document.getElementById('label-top');
-        const viewBtns = document.querySelectorAll('.view-btn');
+async function main(){
+  setStep('手順(1/6): three.js を読み込み中...', '3Dライブラリを取得');
+  const THREE = await import('three');
+  setStep('手順(2/6): アドオン読み込み中...', 'OrbitControls / GLTFLoader');
+  const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  setStep('手順(3/6): MediaPipe を読み込み中...', 'AIエンジンライブラリ');
+  const mp = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs');
+  const { PoseLandmarker, FilesetResolver } = mp;
 
-        let currentStep = "init";
-        function setStep(label, sub = "") {
-            currentStep = label;
-            statusText.innerText = label;
-            if (sub) subStatus.innerText = sub;
-            console.log("[STEP]", label, sub);
+  // ====== 3Dシーン構築 ======
+  setStep('手順(4/6): 3D空間を準備中...', 'シーン構築');
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0f172a);
+  scene.fog = new THREE.Fog(0x0f172a, 8, 25);
+
+  // ライト
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.7));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.2);
+  dl.position.set(3, 6, 4); dl.castShadow = true;
+  dl.shadow.mapSize.set(1024,1024);
+  dl.shadow.camera.left=-3; dl.shadow.camera.right=3;
+  dl.shadow.camera.top=3; dl.shadow.camera.bottom=-3;
+  scene.add(dl);
+
+  // 床とグリッド
+  const floorMat = new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.85, metalness:0.1});
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(20,20), floorMat);
+  floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
+  scene.add(floor);
+  const grid = new THREE.GridHelper(20, 20, 0x475569, 0x334155);
+  scene.add(grid);
+
+  // レンダラー
+  const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.setScissorTest(true);
+
+  // 4つのカメラ
+  const camPersp = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+  camPersp.position.set(2.5, 1.8, 3.5);
+  camPersp.lookAt(0, 0.9, 0);
+  const camFront = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
+  camFront.position.set(0, ORTHO_CENTER_Y, 5); camFront.lookAt(0, ORTHO_CENTER_Y, 0);
+  const camSide = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
+  camSide.position.set(5, ORTHO_CENTER_Y, 0); camSide.lookAt(0, ORTHO_CENTER_Y, 0);
+  const camTop = new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
+  camTop.position.set(0, 8, 0); camTop.lookAt(0, 0, 0); camTop.up.set(0,0,-1);
+
+  const controls = new OrbitControls(camPersp, canvas);
+  controls.target.set(0, 0.9, 0);
+  controls.enableDamping = true;
+
+  function updateOrthoCam(cam, w, h){
+    const aspect = w / Math.max(h, 1);
+    const halfH = ORTHO_HALF_HEIGHT;
+    const halfW = halfH * aspect;
+    cam.left = -halfW; cam.right = halfW;
+    cam.top = halfH; cam.bottom = -halfH;
+    cam.updateProjectionMatrix();
+  }
+
+  // ====== Xbot ロード ======
+  setStep('手順(5/6): キャラクターモデル読み込み中...', 'Xbot を取得');
+  const XBOT_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r158/examples/models/gltf/Xbot.glb';
+  const gltf = await new Promise((resolve, reject) => {
+    new GLTFLoader().load(XBOT_URL, resolve, undefined, err => reject(new Error('GLTF読み込み失敗: '+err.message)));
+  });
+  const avatar = gltf.scene;
+  avatar.traverse(o => { if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; }});
+  scene.add(avatar);
+
+  // ボーン取得
+  const bones = {};
+  avatar.traverse(o => { if(o.isBone) bones[o.name] = o; });
+  console.log('ボーン数:', Object.keys(bones).length);
+  const B = {
+    hips: bones.mixamorigHips,
+    spine: bones.mixamorigSpine,
+    spine1: bones.mixamorigSpine1,
+    spine2: bones.mixamorigSpine2,
+    neck: bones.mixamorigNeck,
+    head: bones.mixamorigHead,
+    lShoulder: bones.mixamorigLeftArm,
+    lElbow: bones.mixamorigLeftForeArm,
+    lWrist: bones.mixamorigLeftHand,
+    rShoulder: bones.mixamorigRightArm,
+    rElbow: bones.mixamorigRightForeArm,
+    rWrist: bones.mixamorigRightHand,
+    lHip: bones.mixamorigLeftUpLeg,
+    lKnee: bones.mixamorigLeftLeg,
+    lAnkle: bones.mixamorigLeftFoot,
+    rHip: bones.mixamorigRightUpLeg,
+    rKnee: bones.mixamorigRightLeg,
+    rAnkle: bones.mixamorigRightFoot,
+  };
+
+  // バインドポーズ保存
+  const bindHipsPos = B.hips.position.clone();
+  const bindQuats = {};
+  Object.keys(B).forEach(k => { if(B[k]) bindQuats[k] = B[k].quaternion.clone(); });
+
+  // ====== スティックピクチャー ======
+  const stickGroup = new THREE.Group();
+  scene.add(stickGroup);
+  const joints = [];
+  const jointMat = new THREE.MeshStandardMaterial({color:0xef4444});
+  const jointGeo = new THREE.SphereGeometry(0.025, 12, 12);
+  for(let i=0;i<33;i++){
+    const m = new THREE.Mesh(jointGeo, jointMat);
+    m.castShadow = true;
+    stickGroup.add(m); joints.push(m);
+  }
+  const STICK_BONES = [
+    [11,13],[13,15],[12,14],[14,16],     // 腕
+    [11,12],[23,24],[11,23],[12,24],     // 胴
+    [23,25],[25,27],[27,31],             // 左脚
+    [24,26],[26,28],[28,32],             // 右脚
+  ];
+  const boneMat = new THREE.MeshStandardMaterial({color:0x60a5fa});
+  const sticks = STICK_BONES.map(()=>{
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,1,8), boneMat);
+    m.castShadow = true; stickGroup.add(m); return m;
+  });
+  stickGroup.visible = false;
+
+  // ビュー切替
+  let viewMode = 'avatar';
+  document.querySelectorAll('[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-view]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      viewMode = btn.dataset.view;
+      avatar.visible = (viewMode === 'avatar' || viewMode === 'both');
+      stickGroup.visible = (viewMode === 'stick' || viewMode === 'both');
+    });
+  });
+  // ====== MediaPipe初期化 ======
+  setStep('手順(6/6): AIエンジン初期化中...', 'WASM環境準備');
+  const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm');
+  setStep('AIモデルをダウンロード中...', '約7MB');
+  progressContainer.classList.remove('hidden');
+  const modelUrl = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+  const res = await fetch(modelUrl);
+  const reader = res.body.getReader();
+  const total = parseInt(res.headers.get('content-length')||'7000000', 10);
+  let received = 0; const chunks = [];
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    chunks.push(value); received += value.length;
+    progressFill.style.width = Math.min(100, received/total*100)+'%';
+  }
+  const buf = new Uint8Array(received);
+  let off=0; for(const c of chunks){ buf.set(c, off); off+=c.length; }
+  progressContainer.classList.add('hidden');
+
+  setStep('最終調整中...', 'モデル起動');
+  let poseLandmarker;
+  try {
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions:{modelAssetBuffer:buf, delegate:'GPU'},
+      runningMode:'VIDEO', numPoses:1
+    });
+  } catch(gpuErr) {
+    console.warn('GPU失敗、CPU再試行', gpuErr);
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions:{modelAssetBuffer:buf, delegate:'CPU'},
+      runningMode:'VIDEO', numPoses:1
+    });
+  }
+  overlay.style.display = 'none';
+  footerInfo.innerText = '✓ 準備完了。動画を選択してください。';
+
+  // ====== ファイル入力 ======
+  document.getElementById('file-input').addEventListener('change', e => {
+    const f = e.target.files[0]; if(!f) return;
+    if(video.src) URL.revokeObjectURL(video.src);
+    video.src = URL.createObjectURL(f);
+    // 基準リセット
+    baselineSet = false; posInited = false;
+    lastTs = 0; lastVideoTime = -1;
+    video.play().catch(err => console.warn('play失敗', err));
+    footerInfo.innerText = `▶ 解析中: ${f.name}`;
+  });
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    baselineSet = false; posInited = false;
+    footerInfo.innerText = '🔄 基準リセット完了';
+  });
+
+  // ====== 姿勢適用ロジック ======
+  const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
+  const tmpQ = new THREE.Quaternion();
+  const UP = new THREE.Vector3(0,1,0);
+
+  // 座標変換: MediaPipe(X右,Y下,Z前) → Three.js(X右,Y上,Z後)
+  function lmToVec3(lm, out){ out.set(lm.x, -lm.y, -lm.z); return out; }
+
+  // ボーン回転を方向ベクトルから設定
+  // バインド方向 → 目標方向 のクォータニオンを計算し、親回転を考慮して適用
+  function aimBone(bone, fromIdx, toIdx, wlm, bindDir){
+    const from = lmToVec3(wlm[fromIdx], new THREE.Vector3());
+    const to   = lmToVec3(wlm[toIdx], new THREE.Vector3());
+    const dir = to.sub(from).normalize();
+    // 親のワールド回転の逆を掛けてローカル化
+    const parentQ = new THREE.Quaternion();
+    bone.parent.getWorldQuaternion(parentQ);
+    parentQ.invert();
+    dir.applyQuaternion(parentQ);
+    tmpQ.setFromUnitVectors(bindDir, dir);
+    bone.quaternion.slerp(
+      bindQuats[Object.keys(B).find(k => B[k]===bone)] ? 
+        bindQuats[Object.keys(B).find(k => B[k]===bone)].clone().multiply(tmpQ) : tmpQ,
+      POSE_SMOOTH
+    );
+  }
+
+  // よりシンプルで安定したアプローチ: 親骨のローカル空間で direction を計算
+  function setBoneDirection(bone, dirWorld, bindDirLocal){
+    if(!bone || !bone.parent) return;
+    const parentQ = new THREE.Quaternion();
+    bone.parent.getWorldQuaternion(parentQ);
+    const dirLocal = dirWorld.clone().applyQuaternion(parentQ.invert());
+    const q = new THREE.Quaternion().setFromUnitVectors(bindDirLocal, dirLocal.normalize());
+    bone.quaternion.slerp(q, POSE_SMOOTH);
+  }
+
+  // バインド方向（Mixamoリグの各骨の「子へ向かう方向」をローカル空間で）
+  // 腕: X軸方向 / 脚: -Y軸方向（一般的なMixamo配置）
+  const BIND_DIRS = {
+    lShoulder: new THREE.Vector3(1, 0, 0),
+    lElbow:    new THREE.Vector3(1, 0, 0),
+    rShoulder: new THREE.Vector3(-1, 0, 0),
+    rElbow:    new THREE.Vector3(-1, 0, 0),
+    lHip:      new THREE.Vector3(0, -1, 0),
+    lKnee:     new THREE.Vector3(0, -1, 0),
+    rHip:      new THREE.Vector3(0, -1, 0),
+    rKnee:     new THREE.Vector3(0, -1, 0),
+  };
+
+  function applyPose(landmarks, worldLandmarks){
+    const wlm = worldLandmarks;
+    function worldDir(fromIdx, toIdx){
+      const a = lmToVec3(wlm[fromIdx], new THREE.Vector3());
+      const b = lmToVec3(wlm[toIdx], new THREE.Vector3());
+      return b.sub(a).normalize();
+    }
+    // 腕
+    setBoneDirection(B.lShoulder, worldDir(11,13), BIND_DIRS.lShoulder);
+    setBoneDirection(B.lElbow,    worldDir(13,15), BIND_DIRS.lElbow);
+    setBoneDirection(B.rShoulder, worldDir(12,14), BIND_DIRS.rShoulder);
+    setBoneDirection(B.rElbow,    worldDir(14,16), BIND_DIRS.rElbow);
+    // 脚
+    setBoneDirection(B.lHip,   worldDir(23,25), BIND_DIRS.lHip);
+    setBoneDirection(B.lKnee,  worldDir(25,27), BIND_DIRS.lKnee);
+    setBoneDirection(B.rHip,   worldDir(24,26), BIND_DIRS.rHip);
+    setBoneDirection(B.rKnee,  worldDir(26,28), BIND_DIRS.rKnee);
+  }
+
+  // ====== 接地&移動ロジック ======
+  let baselineSet = false;
+  let baselineHipX = 0.5, baselineShoulderWidth = 0.2, subjectHeight = 1.7;
+  let posInited = false;
+  let smoothedHip = new THREE.Vector3();
+
+  function vis(lm, idx){ return (lm[idx].visibility ?? 1) > VISIBILITY_TH; }
+
+  function updateHipPosition(landmarks, worldLandmarks){
+    const lm = landmarks, wlm = worldLandmarks;
+
+    // 初回フレームで基準値を記録
+    if(!baselineSet){
+      baselineHipX = (lm[23].x + lm[24].x) / 2;
+      baselineShoulderWidth = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y);
+      const headY  = wlm[0].y;
+      const ankleY = (wlm[27].y + wlm[28].y) / 2;
+      subjectHeight = Math.max(0.5, Math.abs(headY - ankleY));
+      baselineSet = true;
+      console.log(`基準設定: hipX=${baselineHipX.toFixed(3)}, shW=${baselineShoulderWidth.toFixed(3)}, H=${subjectHeight.toFixed(2)}m`);
+    }
+
+    // (1) 身体の最下点を画像座標から検出（接地候補）
+    const candidates = [
+      {idx:27, w:'lAnkle'}, {idx:28, w:'rAnkle'},
+      {idx:23, w:'lHip'},   {idx:24, w:'rHip'},
+      {idx:25, w:'lKnee'},  {idx:26, w:'rKnee'},
+      {idx:15, w:'lWrist'}, {idx:16, w:'rWrist'},
+    ];
+    let lowestImgY = -Infinity, lowestIdx = 27;
+    for(const c of candidates){
+      if(!vis(lm, c.idx)) continue;
+      if(lm[c.idx].y > lowestImgY){ lowestImgY = lm[c.idx].y; lowestIdx = c.idx; }
+    }
+
+    // (2) worldLandmarks で「腰中心 → 最下点」の垂直距離（Y下が正なので符号反転）
+    const hipMidWorldY = (wlm[23].y + wlm[24].y) / 2;
+    const lowestWorldY = wlm[lowestIdx].y;
+    // MediaPipe: Y下が正。腰より低い部位 = wlm[lowest].y > hipMidWorldY
+    // Three系での「腰から最下点までの下方向距離」= lowestWorldY - hipMidWorldY (正の値)
+    const hipToFloorDist = Math.max(0, lowestWorldY - hipMidWorldY);
+
+    // (3) 腰の絶対Y: 床(y=0)に最下点が接地するよう腰を持ち上げる
+    const targetHipY = hipToFloorDist;
+
+    // (4) 水平移動: 画像座標の腰X中心からのズレ
+    const currentHipX = (lm[23].x + lm[24].x) / 2;
+    const dxImage = currentHipX - baselineHipX;  // -0.5〜+0.5
+    // 画面右に動くと被写体は右へ → ワールド +X
+    const targetHipX = bindHipsPos.x + dxImage * HORIZONTAL_SCALE;
+
+    // (5) 奥行きZ: 肩幅変化から推定（近づくと肩幅が大きくなる→Z+）
+    const currentShW = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y);
+    const depthRatio = baselineShoulderWidth / Math.max(currentShW, 0.01);
+    // depthRatio>1 → 遠ざかった(肩幅縮小) → 奥(-Z)
+    // depthRatio<1 → 近づいた → 手前(+Z)
+    const targetHipZ = bindHipsPos.z + (1.0 - depthRatio) * DEPTH_SCALE;
+
+    // (6) スムージング
+    if(!posInited){
+      smoothedHip.set(targetHipX, targetHipY, targetHipZ);
+      posInited = true;
+    } else {
+      smoothedHip.x += (targetHipX - smoothedHip.x) * POS_SMOOTH;
+      smoothedHip.y += (targetHipY - smoothedHip.y) * POS_SMOOTH;
+      smoothedHip.z += (targetHipZ - smoothedHip.z) * POS_SMOOTH;
+    }
+    B.hips.position.copy(smoothedHip);
+
+    // デバッグ表示
+    debugPanel.innerHTML =
+      `dx: ${dxImage.toFixed(3)}<br>` +
+      `dz(depth): ${(1.0-depthRatio).toFixed(3)}<br>` +
+      `lowest: lm[${lowestIdx}]<br>` +
+      `hipY: ${smoothedHip.y.toFixed(2)}m<br>` +
+      `hipX: ${smoothedHip.x.toFixed(2)}m<br>` +
+      `hipZ: ${smoothedHip.z.toFixed(2)}m`;
+  }
+
+  // ====== スティック更新 ======
+  function updateStick(landmarks, worldLandmarks){
+    const wlm = worldLandmarks;
+    // スティックは腰の絶対位置に追従させる
+    for(let i=0;i<33;i++){
+      const p = lmToVec3(wlm[i], new THREE.Vector3());
+      // 腰中心を 0 として、smoothedHip にオフセット
+      const hipMid = new THREE.Vector3(
+        (wlm[23].x + wlm[24].x)/2 * 1.0,
+        -(wlm[23].y + wlm[24].y)/2,
+        -(wlm[23].z + wlm[24].z)/2,
+      );
+      p.sub(hipMid).add(smoothedHip);
+      joints[i].position.copy(p);
+    }
+    STICK_BONES.forEach(([a,b], i) => {
+      const pa = joints[a].position, pb = joints[b].position;
+      const mid = pa.clone().add(pb).multiplyScalar(0.5);
+      const dir = pb.clone().sub(pa);
+      const len = dir.length();
+      sticks[i].position.copy(mid);
+      sticks[i].scale.set(1, len, 1);
+      sticks[i].quaternion.setFromUnitVectors(UP, dir.normalize());
+    });
+  }
+
+  // ====== 推論ループ ======
+  let lastVideoTime = -1, lastTs = 0;
+  async function detect(){
+    if(video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime){
+      lastVideoTime = video.currentTime;
+      const ts = Math.max(lastTs + 1, Math.round(performance.now()));
+      lastTs = ts;
+      try {
+        const result = poseLandmarker.detectForVideo(video, ts);
+        if(result.landmarks && result.landmarks.length > 0 && result.worldLandmarks && result.worldLandmarks.length > 0){
+          applyPose(result.landmarks[0], result.worldLandmarks[0]);
+          updateHipPosition(result.landmarks[0], result.worldLandmarks[0]);
+          updateStick(result.landmarks[0], result.worldLandmarks[0]);
         }
-        function showError(msg, details = "") {
-            spinner.classList.add('hidden');
-            progressContainer.classList.add('hidden');
-            statusText.innerText = msg;
-            statusText.classList.add('text-red-400');
-            subStatus.innerText = `直前ステップ: ${currentStep}`;
-            errorBox.classList.remove('hidden');
-            errorBox.innerText = details || "(詳細なし)";
-        }
-        window.addEventListener('error', (e) => {
-            showError("予期せぬエラー", `${e.message}\n${e.filename}:${e.lineno}:${e.colno}`);
-        });
-        window.addEventListener('unhandledrejection', (e) => {
-            const r = e.reason;
-            const msg = r && r.message ? r.message : String(r);
-            if (msg.includes('message channel closed')) return;
-            showError("非同期エラー", `${msg}\n${r && r.stack ? r.stack : ''}`);
-        });
+      } catch(err){
+        console.warn('detect失敗', err);
+      }
+    }
+  }
 
-        function withTimeout(promise, ms, label) {
-            return Promise.race([
-                promise,
-                new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} がタイムアウト(${ms}ms)`)), ms))
-            ]);
-        }
-        async function fetchWithProgress(url, onProgress) {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`ダウンロード失敗: HTTP ${response.status} (${url})`);
-            const total = parseInt(response.headers.get('content-length') || '0', 10);
-            let loaded = 0;
-            const reader = response.body.getReader();
-            const chunks = [];
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                chunks.push(value); loaded += value.length;
-                if (total) onProgress(Math.round(loaded/total*100)); else onProgress(-1, loaded);
-            }
-            const buffer = new Uint8Array(loaded); let offset = 0;
-            for (const c of chunks) { buffer.set(c, offset); offset += c.length; }
-            return buffer;
-        }
+  // ====== レンダーループ（4分割） ======
+  function renderView(cam, x, y, w, h){
+    renderer.setViewport(x, y, w, h);
+    renderer.setScissor(x, y, w, h);
+    renderer.render(scene, cam);
+  }
 
-        async function main() {
-            try {
-                setStep("手順(1/6): three.js を読み込み中...");
-                const THREE = await withTimeout(import('three'), 15000, "three");
-                setStep("手順(2/6): アドオン読み込み中...");
-                const { OrbitControls } = await withTimeout(import('three/addons/controls/OrbitControls.js'), 15000, "OrbitControls");
-                const { GLTFLoader } = await withTimeout(import('three/addons/loaders/GLTFLoader.js'), 15000, "GLTFLoader");
-                setStep("手順(3/6): MediaPipe を読み込み中...");
-                const mp = await withTimeout(
-                    import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs'),
-                    30000, "MediaPipe"
-                );
-                const { PoseLandmarker, FilesetResolver } = mp;
-                if (!PoseLandmarker || !FilesetResolver) throw new Error("MediaPipe エクスポート不足");
+  function resize(){
+    const rect = canvas.parentElement.getBoundingClientRect();
+    renderer.setSize(rect.width, rect.height, false);
+    const halfW = rect.width / 2, halfH = rect.height / 2;
+    camPersp.aspect = halfW / Math.max(halfH, 1);
+    camPersp.updateProjectionMatrix();
+    updateOrthoCam(camFront, halfW, halfH);
+    updateOrthoCam(camSide,  halfW, halfH);
+    updateOrthoCam(camTop,   halfW, halfH);
+    // ラベル配置
+    document.getElementById('lbl-front').style.cssText = `left:${halfW+8}px;top:8px`;
+    document.getElementById('lbl-side').style.cssText  = `left:8px;top:${halfH+8}px`;
+    document.getElementById('lbl-top').style.cssText   = `left:${halfW+8}px;top:${halfH+8}px`;
+  }
+  resize();
+  window.addEventListener('resize', resize);
 
-                setStep("手順(4/6): 3D空間を準備中...");
+  async function loop(){
+    await detect();
+    controls.update();
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const halfW = Math.floor(rect.width / 2);
+    const halfH = Math.floor(rect.height / 2);
+    // 左上=Perspective 右上=Front 左下=Side 右下=Top
+    // WebGL座標は左下原点なので Y を反転
+    renderView(camPersp, 0,       halfH, halfW, halfH);
+    renderView(camFront, halfW,   halfH, halfW, halfH);
+    renderView(camSide,  0,       0,     halfW, halfH);
+    renderView(camTop,   halfW,   0,     halfW, halfH);
+    requestAnimationFrame(loop);
+  }
+  loop();
+}
 
-                const scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x1a1a1a);
-
-                const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-                renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
-                renderer.shadowMap.enabled = true;
-                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-                renderer.outputColorSpace = THREE.SRGBColorSpace;
-                renderer.setScissorTest(true);
-                canvasContainer.appendChild(renderer.domElement);
-
-                // ===== カメラ =====
-                // Perspective（自由視点）
-                const persCam = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-                persCam.position.set(2.5, 1.6, 3.5);
-
-                // Ortho 用：画面に映したい縦方向の半幅（メートル）
-                // Xbot身長 ≈ 1.7m なので、ちょい余裕を持って ±1.3m （計2.6m）に
-                const ORTHO_HALF_HEIGHT = 1.3;
-                const ORTHO_CENTER_Y = 0.9;
-
-                // Front（正面：被写体の Z+ から見る）
-                const frontCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
-                frontCam.position.set(0, ORTHO_CENTER_Y, 5);
-                frontCam.lookAt(0, ORTHO_CENTER_Y, 0);
-
-                // Side（側面：被写体の X+ から見る）
-                const sideCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
-                sideCam.position.set(5, ORTHO_CENTER_Y, 0);
-                sideCam.lookAt(0, ORTHO_CENTER_Y, 0);
-
-                // Top（上面：Y+ から見下ろす）
-                const topCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
-                topCam.position.set(0, 5, 0);
-                topCam.lookAt(0, 0, 0);
-                topCam.up.set(0, 0, -1);
-
-                const controls = new OrbitControls(persCam, renderer.domElement);
-                controls.enableDamping = true;
-                controls.target.set(0, ORTHO_CENTER_Y, 0);
-
-                scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-                const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-                dirLight.position.set(3, 6, 3);
-                dirLight.castShadow = true;
-                dirLight.shadow.mapSize.set(1024, 1024);
-                dirLight.shadow.camera.left = -3;
-                dirLight.shadow.camera.right = 3;
-                dirLight.shadow.camera.top = 5;
-                dirLight.shadow.camera.bottom = -1;
-                scene.add(dirLight);
-
-                const floor = new THREE.Mesh(
-                    new THREE.PlaneGeometry(20, 20),
-                    new THREE.MeshStandardMaterial({ color: 0x222831, roughness: 0.9 })
-                );
-                floor.rotation.x = -Math.PI / 2;
-                floor.receiveShadow = true;
-                scene.add(floor);
-                const grid = new THREE.GridHelper(10, 10, 0x444444, 0x2a2a2a);
-                grid.position.y = 0.01;
-                scene.add(grid);
-
-                setStep("手順(5/6): キャラクターモデル読み込み中...");
-                const XBOT_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r158/examples/models/gltf/Xbot.glb';
-                const gltfLoader = new GLTFLoader();
-                const gltf = await withTimeout(
-                    new Promise((resolve, reject) => {
-                        gltfLoader.load(XBOT_URL, resolve,
-                            (xhr) => {
-                                if (xhr.lengthComputable) subStatus.innerText = `モデル取得中: ${Math.round(xhr.loaded/xhr.total*100)}%`;
-                            },
-                            (err) => reject(new Error(`GLTF読み込み失敗: ${err && err.message ? err.message : err}`))
-                        );
-                    }),
-                    30000, "GLTF"
-                );
-
-                const avatar = gltf.scene;
-                avatar.traverse(o => {
-                    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
-                });
-                scene.add(avatar);
-
-                const bones = {};
-                avatar.traverse(o => { if (o.isBone) bones[o.name] = o; });
-
-                const B = {
-                    hips:      bones['mixamorigHips'],
-                    lArm:      bones['mixamorigLeftArm'],
-                    lForeArm:  bones['mixamorigLeftForeArm'],
-                    lHand:     bones['mixamorigLeftHand'],
-                    rArm:      bones['mixamorigRightArm'],
-                    rForeArm:  bones['mixamorigRightForeArm'],
-                    rHand:     bones['mixamorigRightHand'],
-                    lUpLeg:    bones['mixamorigLeftUpLeg'],
-                    lLeg:      bones['mixamorigLeftLeg'],
-                    lFoot:     bones['mixamorigLeftFoot'],
-                    rUpLeg:    bones['mixamorigRightUpLeg'],
-                    rLeg:      bones['mixamorigRightLeg'],
-                    rFoot:     bones['mixamorigRightFoot'],
-                };
-                if (!B.hips) throw new Error("Hips ボーンが見つかりません。");
-
-                avatar.updateMatrixWorld(true);
-                const bindHipsLocalPos = B.hips.position.clone();
-
-                const _vA = new THREE.Vector3();
-                const _vB = new THREE.Vector3();
-                function worldDir(a, b) {
-                    a.getWorldPosition(_vA); b.getWorldPosition(_vB);
-                    return new THREE.Vector3().subVectors(_vB, _vA).normalize();
-                }
-                const bindDir = {
-                    lArm: worldDir(B.lArm, B.lForeArm), lForeArm: worldDir(B.lForeArm, B.lHand),
-                    rArm: worldDir(B.rArm, B.rForeArm), rForeArm: worldDir(B.rForeArm, B.rHand),
-                    lUpLeg: worldDir(B.lUpLeg, B.lLeg), lLeg: worldDir(B.lLeg, B.lFoot),
-                    rUpLeg: worldDir(B.rUpLeg, B.rLeg), rLeg: worldDir(B.rLeg, B.rFoot),
-                };
-                const bindWorldQuat = {};
-                for (const k of Object.keys(B)) {
-                    if (!B[k]) continue;
-                    bindWorldQuat[k] = new THREE.Quaternion();
-                    B[k].getWorldQuaternion(bindWorldQuat[k]);
-                }
-                const bindHipsWorldQuatInv = bindWorldQuat.hips.clone().invert();
-
-                // スティック
-                const stickGroup = new THREE.Group();
-                scene.add(stickGroup);
-                const stickJoints = [];
-                const jointGeo = new THREE.SphereGeometry(0.025, 12, 12);
-                const jointMat = new THREE.MeshBasicMaterial({ color: 0x3b82f6 });
-                for (let i = 0; i < 33; i++) {
-                    const s = new THREE.Mesh(jointGeo, jointMat);
-                    if (i >= 1 && i <= 10) s.visible = false;
-                    stickGroup.add(s);
-                    stickJoints.push(s);
-                }
-                const STICK_CONNECTIONS = [
-                    [11,12], [11,23], [12,24], [23,24],
-                    [11,13], [13,15],
-                    [12,14], [14,16],
-                    [23,25], [25,27], [27,31],
-                    [24,26], [26,28], [28,32],
-                ];
-                const stickLineMat = new THREE.LineBasicMaterial({ color: 0xffffff });
-                const stickLines = STICK_CONNECTIONS.map(() => {
-                    const g = new THREE.BufferGeometry();
-                    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-                    const line = new THREE.Line(g, stickLineMat);
-                    stickGroup.add(line);
-                    return line;
-                });
-
-                let viewMode = 'model';
-                function applyViewMode() {
-                    avatar.visible = (viewMode === 'model' || viewMode === 'both');
-                    stickGroup.visible = (viewMode === 'stick' || viewMode === 'both');
-                }
-                applyViewMode();
-                viewBtns.forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        viewMode = btn.dataset.mode;
-                        viewBtns.forEach(b => {
-                            b.classList.remove('bg-blue-600', 'text-white');
-                            b.classList.add('bg-gray-700', 'text-gray-200');
-                        });
-                        btn.classList.remove('bg-gray-700', 'text-gray-200');
-                        btn.classList.add('bg-blue-600', 'text-white');
-                        applyViewMode();
-                    });
-                });
-
-                setStep("手順(6/6): AIエンジン初期化中...");
-                const vision = await withTimeout(
-                    FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"),
-                    30000, "FilesetResolver"
-                );
-
-                setStep("AIモデルをダウンロード中...");
-                progressContainer.classList.remove('hidden');
-                const modelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-                const modelBuffer = await fetchWithProgress(modelUrl, (pct, loaded) => {
-                    if (pct >= 0) { progressBar.style.width = `${pct}%`; progressText.innerText = `${pct}%`; }
-                    else { progressText.innerText = `${Math.round(loaded/1024/1024*10)/10} MB`; progressBar.style.width = '100%'; }
-                });
-                progressContainer.classList.add('hidden');
-
-                setStep("最終調整中...");
-                let poseLandmarker;
-                try {
-                    poseLandmarker = await withTimeout(
-                        PoseLandmarker.createFromOptions(vision, {
-                            baseOptions: { modelAssetBuffer: modelBuffer, delegate: "GPU" },
-                            runningMode: "VIDEO", numPoses: 1
-                        }), 20000, "PoseLandmarker(GPU)"
-                    );
-                } catch (gpuErr) {
-                    console.warn("GPU失敗、CPUで再試行:", gpuErr);
-                    poseLandmarker = await withTimeout(
-                        PoseLandmarker.createFromOptions(vision, {
-                            baseOptions: { modelAssetBuffer: modelBuffer, delegate: "CPU" },
-                            runningMode: "VIDEO", numPoses: 1
-                        }), 20000, "PoseLandmarker(CPU)"
-                    );
-                }
-
-                spinner.classList.add('hidden');
-                statusText.innerText = "準備完了！";
-                subStatus.innerText = "上の「動画を選択」ボタンから動画を選んでください";
-                uploadBtn.disabled = false;
-                setTimeout(() => {
-                    if (video.src === "") overlay.style.backgroundColor = "rgba(17, 17, 17, 0.7)";
-                }, 1000);
-
-                uploadBtn.addEventListener('click', () => videoUpload.click());
-                videoUpload.addEventListener('change', (e) => {
-                    const file = e.target.files[0]; if (!file) return;
-                    overlay.style.opacity = '0';
-                    setTimeout(() => overlay.classList.add('hidden'), 500);
-                    if (video.src) URL.revokeObjectURL(video.src);
-                    video.src = URL.createObjectURL(file);
-                    video.load();
-                    video.play().catch(err => console.warn('再生開始に失敗:', err));
-                    firstFrame = true; lastVideoTime = -1; baselineSet = false; posInited = false;
-                });
-
-                // ===== 移動関連（前回より控えめに） =====
-                const HORIZONTAL_SCALE = 3.0;
-                const DEPTH_SCALE      = 1.0;
-                const POSE_SMOOTH = 0.4;
-                const POS_SMOOTH = 0.15;
-
-                const lm = new Array(33).fill(null).map(() => new THREE.Vector3());
-                const lmRaw = new Array(33).fill(null).map(() => new THREE.Vector3());
-                let firstFrame = true;
-                let baselineSet = false;
-                let baseImgX = 0, baseWorldZ = 0;
-                const targetHipPos = new THREE.Vector3();
-                const currentHipPos = new THREE.Vector3();
-                let posInited = false;
-
-                const _qDelta = new THREE.Quaternion();
-                const _qTargetWorld = new THREE.Quaternion();
-                const _qParentWorld = new THREE.Quaternion();
-                const _qParentInv = new THREE.Quaternion();
-
-                function applyBoneByDirection(bone, bindDirVec, currentDirVec, bindWorldQ) {
-                    if (!bone || currentDirVec.lengthSq() < 1e-8) return;
-                    currentDirVec.normalize();
-                    _qDelta.setFromUnitVectors(bindDirVec, currentDirVec);
-                    _qTargetWorld.multiplyQuaternions(_qDelta, bindWorldQ);
-                    if (bone.parent && bone.parent.isBone) {
-                        bone.parent.getWorldQuaternion(_qParentWorld);
-                        _qParentInv.copy(_qParentWorld).invert();
-                        bone.quaternion.copy(_qParentInv).multiply(_qTargetWorld);
-                    } else {
-                        bone.quaternion.copy(_qTargetWorld);
-                    }
-                }
-
-                let lastVideoTime = -1;
-                let lastTs = 0;
-                const tmpA = new THREE.Vector3();
-                const tmpHipRight = new THREE.Vector3();
-                const tmpHipMid = new THREE.Vector3();
-                const tmpShoulderMid = new THREE.Vector3();
-                const tmpUp = new THREE.Vector3();
-                const tmpFwd = new THREE.Vector3();
-                const tmpTrueUp = new THREE.Vector3();
-                const tmpMat = new THREE.Matrix4();
-                const tmpHipWorldQuat = new THREE.Quaternion();
-                const tmpFootL = new THREE.Vector3();
-                const tmpFootR = new THREE.Vector3();
-                const hipWorldPos = new THREE.Vector3();
-
-                function updatePose() {
-                    if (!(video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime && poseLandmarker)) return;
-                    lastVideoTime = video.currentTime;
-                    lastTs = Math.max(lastTs + 1, Math.round(performance.now()));
-
-                    try {
-                        const results = poseLandmarker.detectForVideo(video, lastTs);
-                        const hasImg = results.landmarks && results.landmarks.length > 0;
-                        const hasWorld = results.worldLandmarks && results.worldLandmarks.length > 0;
-                        if (!hasWorld) return;
-
-                        const w = results.worldLandmarks[0];
-                        for (let i = 0; i < 33; i++) {
-                            lmRaw[i].set(w[i].x, -w[i].y, -w[i].z);
-                        }
-                        if (firstFrame) {
-                            for (let i = 0; i < 33; i++) lm[i].copy(lmRaw[i]);
-                            firstFrame = false;
-                        } else {
-                            for (let i = 0; i < 33; i++) lm[i].lerp(lmRaw[i], POSE_SMOOTH);
-                        }
-
-                        let dx = 0, dz = 0;
-                        if (hasImg) {
-                            const img = results.landmarks[0];
-                            const imgHipX = (img[23].x + img[24].x) * 0.5;
-                            const worldHipZ = (w[23].z + w[24].z) * 0.5;
-                            if (!baselineSet) {
-                                baseImgX = imgHipX; baseWorldZ = worldHipZ;
-                                baselineSet = true;
-                            }
-                            dx = (imgHipX - baseImgX) * HORIZONTAL_SCALE;
-                            dz = -(worldHipZ - baseWorldZ) * DEPTH_SCALE;
-                        }
-
-                        B.hips.position.set(bindHipsLocalPos.x + dx, bindHipsLocalPos.y, bindHipsLocalPos.z + dz);
-
-                        tmpHipMid.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
-                        tmpHipRight.subVectors(lm[23], lm[24]).normalize();
-                        tmpShoulderMid.addVectors(lm[11], lm[12]).multiplyScalar(0.5);
-                        tmpUp.subVectors(tmpShoulderMid, tmpHipMid).normalize();
-                        tmpFwd.crossVectors(tmpHipRight, tmpUp).normalize();
-                        tmpTrueUp.crossVectors(tmpFwd, tmpHipRight).normalize();
-                        tmpMat.makeBasis(tmpHipRight, tmpTrueUp, tmpFwd);
-                        tmpHipWorldQuat.setFromRotationMatrix(tmpMat);
-                        B.hips.quaternion.copy(tmpHipWorldQuat).multiply(bindHipsWorldQuatInv);
-
-                        avatar.updateMatrixWorld(true);
-
-                        tmpA.subVectors(lm[13], lm[11]).normalize();
-                        applyBoneByDirection(B.lArm, bindDir.lArm, tmpA, bindWorldQuat.lArm);
-                        avatar.updateMatrixWorld(true);
-                        tmpA.subVectors(lm[15], lm[13]).normalize();
-                        applyBoneByDirection(B.lForeArm, bindDir.lForeArm, tmpA, bindWorldQuat.lForeArm);
-
-                        tmpA.subVectors(lm[14], lm[12]).normalize();
-                        applyBoneByDirection(B.rArm, bindDir.rArm, tmpA, bindWorldQuat.rArm);
-                        avatar.updateMatrixWorld(true);
-                        tmpA.subVectors(lm[16], lm[14]).normalize();
-                        applyBoneByDirection(B.rForeArm, bindDir.rForeArm, tmpA, bindWorldQuat.rForeArm);
-
-                        tmpA.subVectors(lm[25], lm[23]).normalize();
-                        applyBoneByDirection(B.lUpLeg, bindDir.lUpLeg, tmpA, bindWorldQuat.lUpLeg);
-                        avatar.updateMatrixWorld(true);
-                        tmpA.subVectors(lm[27], lm[25]).normalize();
-                        applyBoneByDirection(B.lLeg, bindDir.lLeg, tmpA, bindWorldQuat.lLeg);
-
-                        tmpA.subVectors(lm[26], lm[24]).normalize();
-                        applyBoneByDirection(B.rUpLeg, bindDir.rUpLeg, tmpA, bindWorldQuat.rUpLeg);
-                        avatar.updateMatrixWorld(true);
-                        tmpA.subVectors(lm[28], lm[26]).normalize();
-                        applyBoneByDirection(B.rLeg, bindDir.rLeg, tmpA, bindWorldQuat.rLeg);
-
-                        avatar.updateMatrixWorld(true);
-
-                        // しゃがみ対応：足の最低点を Y=0 に
-                        B.lFoot.getWorldPosition(tmpFootL);
-                        B.rFoot.getWorldPosition(tmpFootR);
-                        const minFootY = Math.min(tmpFootL.y, tmpFootR.y);
-                        const newHipY = B.hips.position.y - minFootY;
-                        targetHipPos.set(B.hips.position.x, newHipY, B.hips.position.z);
-
-                        if (!posInited) {
-                            currentHipPos.copy(targetHipPos);
-                            posInited = true;
-                        } else {
-                            currentHipPos.lerp(targetHipPos, POS_SMOOTH);
-                        }
-                        B.hips.position.copy(currentHipPos);
-                        avatar.updateMatrixWorld(true);
-
-                        // スティック更新
-                        B.hips.getWorldPosition(hipWorldPos);
-                        const lmHipY = (lm[23].y + lm[24].y) * 0.5;
-                        for (let i = 0; i < 33; i++) {
-                            stickJoints[i].position.set(
-                                hipWorldPos.x + lm[i].x,
-                                hipWorldPos.y + lm[i].y - lmHipY,
-                                hipWorldPos.z + lm[i].z
-                            );
-                        }
-                        STICK_CONNECTIONS.forEach((conn, i) => {
-                            const p1 = stickJoints[conn[0]].position;
-                            const p2 = stickJoints[conn[1]].position;
-                            const arr = stickLines[i].geometry.attributes.position.array;
-                            arr[0]=p1.x; arr[1]=p1.y; arr[2]=p1.z;
-                            arr[3]=p2.x; arr[4]=p2.y; arr[5]=p2.z;
-                            stickLines[i].geometry.attributes.position.needsUpdate = true;
-                        });
-                    } catch (e) {
-                        console.error("推論エラー:", e);
-                    }
-                }
-
-                // ===== 4ビュー描画（アスペクト比対応） =====
-                // 縦表示範囲は ORTHO_HALF_HEIGHT 固定、横はビューポート比に合わせて自動計算
-                function updateOrthoCam(cam, viewW, viewH) {
-                    const aspect = viewW / viewH;
-                    cam.top    =  ORTHO_HALF_HEIGHT;
-                    cam.bottom = -ORTHO_HALF_HEIGHT;
-                    cam.left   = -ORTHO_HALF_HEIGHT * aspect;
-                    cam.right  =  ORTHO_HALF_HEIGHT * aspect;
-                    cam.updateProjectionMatrix();
-                }
-
-                function renderView(cam, x, y, w, h) {
-                    if (cam.isOrthographicCamera) {
-                        updateOrthoCam(cam, w, h);
-                    } else {
-                        cam.aspect = w / h;
-                        cam.updateProjectionMatrix();
-                    }
-                    renderer.setViewport(x, y, w, h);
-                    renderer.setScissor(x, y, w, h);
-                    renderer.render(scene, cam);
-                }
-
-                function renderLoop() {
-                    requestAnimationFrame(renderLoop);
-                    updatePose();
-                    controls.update();
-
-                    const W = canvasContainer.clientWidth;
-                    const H = canvasContainer.clientHeight;
-                    const halfW = Math.floor(W / 2);
-                    const halfH = Math.floor(H / 2);
-
-                    renderer.setClearColor(0x1a1a1a, 1);
-                    renderer.clear();
-
-                    // WebGL座標は左下原点
-                    renderView(persCam,  0,     halfH, halfW, halfH);
-                    renderView(frontCam, halfW, halfH, halfW, halfH);
-                    renderView(sideCam,  0,     0,     halfW, halfH);
-                    renderView(topCam,   halfW, 0,     halfW, halfH);
-
-                    // ラベル位置（CSSは左上原点）
-                    labelPerspective.style.left = '6px';        labelPerspective.style.top = '4px';
-                    labelFront.style.left = (halfW + 6) + 'px'; labelFront.style.top = '4px';
-                    labelSide.style.left = '6px';               labelSide.style.top = (halfH + 4) + 'px';
-                    labelTop.style.left = (halfW + 6) + 'px';   labelTop.style.top = (halfH + 4) + 'px';
-                }
-
-                window.addEventListener('resize', () => {
-                    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-                    renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
-                });
-
-                renderLoop();
-
-            } catch (error) {
-                showError("起動エラー", `${error.message || error}\n\nStack:\n${error.stack || '(no stack)'}`);
-                console.error(error);
-            }
-        }
-
-        main();
-    </script>
+main().catch(err => showError(`起動エラー: ${err.message}\n${err.stack}`));
+</script>
 </body>
 </html>
