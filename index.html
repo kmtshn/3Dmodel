@@ -476,13 +476,6 @@ async function main(){
     bone.quaternion.slerp(q, smooth);
   }
 
-  // ★ 修正版: 胴体回転
-  //   肩と腰のworld landmarksから「体の右」「体の上」を出して、
-  //   それらから forward(=right × up) を計算。
-  //   Xbot のバインドポーズでは hips のワールド軸が
-  //     右= +X, 上= +Y, 前= +Z
-  //   になっているので、ターゲットの (right, up, forward) を
-  //   行列の (X軸, Y軸, Z軸) としてそのまま組めばOK。
   function applyTorsoRotation(person, wlm){
     const B = person.B;
     const lHp = lmToVec3(wlm[23], new THREE.Vector3());
@@ -490,20 +483,9 @@ async function main(){
     const lSh = lmToVec3(wlm[11], new THREE.Vector3());
     const rSh = lmToVec3(wlm[12], new THREE.Vector3());
 
-    // 体の右 = 右腰 → 左腰  ではなく、
-    // Three.js座標で +X が「カメラから見て右 = 被写体の左」なので、
-    // 被写体の右側は -X 寄り。
-    // MediaPipe で index 24 = right hip (被写体の右), 23 = left hip (被写体の左)
-    // よって 被写体の「体の右方向」を表すベクトルは: rHp - lHp
-    //   (rHp は被写体右 = -X 寄り、lHp は被写体左 = +X 寄り、なので
-    //    rHp - lHp は -X 方向。これは「カメラから見て左」)
-    //
-    // でも我々が欲しいのは Xbot の hips ローカル +X 軸に対応する向き。
-    // Xbot の +X はアバターの「右手側」 = 被写体の右手側。
-    // よってアバターの +X に対応するワールド方向は rHp - lHp で正しい。
+    // 体の右方向（被写体の右手側 → ワールド -X 寄り）
     const bodyRight = new THREE.Vector3().subVectors(rHp, lHp);
-
-    // 体の上 = 肩中央 - 腰中央
+    // 体の上方向
     const hipMid = lHp.clone().add(rHp).multiplyScalar(0.5);
     const shMid  = lSh.clone().add(rSh).multiplyScalar(0.5);
     const bodyUp = shMid.clone().sub(hipMid);
@@ -512,21 +494,21 @@ async function main(){
     bodyRight.normalize();
     bodyUp.normalize();
 
-    // forward = right × up（右手座標系）
+    // forward = right × up
     const bodyForward = new THREE.Vector3().crossVectors(bodyRight, bodyUp).normalize();
-    // up を直交化
     const orthUp = new THREE.Vector3().crossVectors(bodyForward, bodyRight).normalize();
 
-    // Xbot hips のローカル軸対応:
-    //   ローカル +X(右) → bodyRight
-    //   ローカル +Y(上) → orthUp
-    //   ローカル +Z(前) → bodyForward
-    const m = new THREE.Matrix4().makeBasis(bodyRight, orthUp, bodyForward);
+    // ★ Xbot の hips ローカル軸対応（実機検証で確定）:
+    //   ローカル +X(右)  ↔  -bodyRight   (Xbotの右はワールドの左)
+    //   ローカル +Y(上)  ↔  orthUp
+    //   ローカル +Z(前)  ↔  -bodyForward (Xbotの+Zは背中側)
+    const m = new THREE.Matrix4().makeBasis(
+      bodyRight.clone().negate(),
+      orthUp,
+      bodyForward.clone().negate()
+    );
     const targetWorldQ = new THREE.Quaternion().setFromRotationMatrix(m);
 
-    // hips の親(=avatar root)のワールド回転を考慮してローカルに変換
-    // ただし avatar root は回していないので parent world quat ≒ identity
-    // 念のため計算する
     B.hips.parent.updateWorldMatrix(true, false);
     const parentWQ = new THREE.Quaternion();
     B.hips.parent.getWorldQuaternion(parentWQ);
