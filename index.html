@@ -16,7 +16,7 @@
     <style>
         body { margin: 0; overflow: hidden; background-color: #121212; touch-action: none; }
         .view-label {
-            position: absolute; top: 4px; left: 6px;
+            position: absolute;
             font: 10px/1.2 ui-monospace, monospace;
             color: #9ca3af;
             background: rgba(0,0,0,0.5);
@@ -30,7 +30,6 @@
     <header class="p-3 md:p-4 bg-[#1e1e1e] border-b border-[#333] flex justify-between items-center z-10 shadow-md">
         <h1 class="text-base md:text-xl font-bold tracking-wider text-blue-400">3D MOTION AI</h1>
         <div class="flex items-center gap-2 flex-wrap">
-            <!-- 表示切替 -->
             <div class="flex gap-1 text-xs">
                 <button data-mode="model" class="view-btn px-2 py-1 rounded bg-blue-600 text-white">3D</button>
                 <button data-mode="stick" class="view-btn px-2 py-1 rounded bg-gray-700 text-gray-200">骨格</button>
@@ -44,7 +43,6 @@
     </header>
 
     <div class="flex-1 flex flex-col p-2 gap-2 overflow-hidden bg-[#0a0a0a]">
-        <!-- 上部：動画 -->
         <div class="flex-1 bg-black rounded-lg border border-[#333] relative overflow-hidden flex justify-center items-center shadow-lg">
             <video id="input-video" class="max-h-full max-w-full object-contain" controls loop playsinline muted></video>
 
@@ -64,20 +62,18 @@
             </div>
         </div>
 
-        <!-- 下部：三面図 -->
         <div id="canvas-container" class="flex-1 bg-[#1a1a1a] rounded-lg border border-[#333] relative overflow-hidden shadow-lg">
             <div id="label-perspective" class="view-label">PERSPECTIVE</div>
             <div id="label-front" class="view-label">FRONT</div>
             <div id="label-side"  class="view-label">SIDE</div>
             <div id="label-top"   class="view-label">TOP</div>
-            <div class="absolute bottom-2 right-2 bg-black/60 backdrop-blur px-2 py-1 text-[10px] text-gray-300 rounded border border-gray-700 pointer-events-none">
+            <div class="absolute bottom-2 right-2 bg-black/60 backdrop-blur px-2 py-1 text-[10px] text-gray-300 rounded border border-gray-700 pointer-events-none z-10">
                 左上ビュー: スワイプで回転
             </div>
         </div>
     </div>
 
     <script type="module">
-        // ====== DOM ======
         const video = document.getElementById('input-video');
         const canvasContainer = document.getElementById('canvas-container');
         const uploadBtn = document.getElementById('upload-btn');
@@ -163,7 +159,6 @@
 
                 setStep("手順(4/6): 3D空間を準備中...");
 
-                // ===== シーン =====
                 const scene = new THREE.Scene();
                 scene.background = new THREE.Color(0x1a1a1a);
 
@@ -176,26 +171,35 @@
                 renderer.setScissorTest(true);
                 canvasContainer.appendChild(renderer.domElement);
 
-                // ===== 4ビュー（左上:Perspective, 右上:Front, 左下:Side, 右下:Top）=====
+                // ===== カメラ =====
+                // Perspective（自由視点）
                 const persCam = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
                 persCam.position.set(2.5, 1.6, 3.5);
 
-                const frontCam = new THREE.OrthographicCamera(-1.5, 1.5, 2.2, -0.2, 0.1, 100);
-                frontCam.position.set(0, 1.0, 5);
-                frontCam.lookAt(0, 1.0, 0);
+                // Ortho 用：画面に映したい縦方向の半幅（メートル）
+                // Xbot身長 ≈ 1.7m なので、ちょい余裕を持って ±1.3m （計2.6m）に
+                const ORTHO_HALF_HEIGHT = 1.3;
+                const ORTHO_CENTER_Y = 0.9;
 
-                const sideCam = new THREE.OrthographicCamera(-1.5, 1.5, 2.2, -0.2, 0.1, 100);
-                sideCam.position.set(5, 1.0, 0);
-                sideCam.lookAt(0, 1.0, 0);
+                // Front（正面：被写体の Z+ から見る）
+                const frontCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+                frontCam.position.set(0, ORTHO_CENTER_Y, 5);
+                frontCam.lookAt(0, ORTHO_CENTER_Y, 0);
 
-                const topCam = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 100);
+                // Side（側面：被写体の X+ から見る）
+                const sideCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+                sideCam.position.set(5, ORTHO_CENTER_Y, 0);
+                sideCam.lookAt(0, ORTHO_CENTER_Y, 0);
+
+                // Top（上面：Y+ から見下ろす）
+                const topCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
                 topCam.position.set(0, 5, 0);
                 topCam.lookAt(0, 0, 0);
                 topCam.up.set(0, 0, -1);
 
                 const controls = new OrbitControls(persCam, renderer.domElement);
                 controls.enableDamping = true;
-                controls.target.set(0, 1.0, 0);
+                controls.target.set(0, ORTHO_CENTER_Y, 0);
 
                 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
                 const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -207,7 +211,6 @@
                 dirLight.shadow.camera.top = 5;
                 dirLight.shadow.camera.bottom = -1;
                 scene.add(dirLight);
-                scene.add(new THREE.DirectionalLight(0x88aaff, 0.4).translateX(-3).translateY(2).translateZ(-3));
 
                 const floor = new THREE.Mesh(
                     new THREE.PlaneGeometry(20, 20),
@@ -284,21 +287,18 @@
                 }
                 const bindHipsWorldQuatInv = bindWorldQuat.hips.clone().invert();
 
-                // ===== スティックピクチャー（骨格） =====
+                // スティック
                 const stickGroup = new THREE.Group();
                 scene.add(stickGroup);
-
-                // 33個の関節球
                 const stickJoints = [];
                 const jointGeo = new THREE.SphereGeometry(0.025, 12, 12);
                 const jointMat = new THREE.MeshBasicMaterial({ color: 0x3b82f6 });
                 for (let i = 0; i < 33; i++) {
                     const s = new THREE.Mesh(jointGeo, jointMat);
-                    if (i >= 1 && i <= 10) s.visible = false; // 顔の細かいランドマークは省略
+                    if (i >= 1 && i <= 10) s.visible = false;
                     stickGroup.add(s);
                     stickJoints.push(s);
                 }
-                // 骨（線）
                 const STICK_CONNECTIONS = [
                     [11,12], [11,23], [12,24], [23,24],
                     [11,13], [13,15],
@@ -315,8 +315,7 @@
                     return line;
                 });
 
-                // 表示モード
-                let viewMode = 'model'; // 'model' | 'stick' | 'both'
+                let viewMode = 'model';
                 function applyViewMode() {
                     avatar.visible = (viewMode === 'model' || viewMode === 'both');
                     stickGroup.visible = (viewMode === 'stick' || viewMode === 'both');
@@ -389,9 +388,9 @@
                     firstFrame = true; lastVideoTime = -1; baselineSet = false; posInited = false;
                 });
 
-                // ===== 移動関連 =====
-                const HORIZONTAL_SCALE = 5.0;
-                const DEPTH_SCALE      = 1.5;
+                // ===== 移動関連（前回より控えめに） =====
+                const HORIZONTAL_SCALE = 3.0;
+                const DEPTH_SCALE      = 1.0;
                 const POSE_SMOOTH = 0.4;
                 const POS_SMOOTH = 0.15;
 
@@ -436,6 +435,7 @@
                 const tmpHipWorldQuat = new THREE.Quaternion();
                 const tmpFootL = new THREE.Vector3();
                 const tmpFootR = new THREE.Vector3();
+                const hipWorldPos = new THREE.Vector3();
 
                 function updatePose() {
                     if (!(video.readyState >= 2 && !video.paused && video.currentTime !== lastVideoTime && poseLandmarker)) return;
@@ -459,7 +459,6 @@
                             for (let i = 0; i < 33; i++) lm[i].lerp(lmRaw[i], POSE_SMOOTH);
                         }
 
-                        // === 水平移動・奥行きだけ仮計算（Yはあとで決める）===
                         let dx = 0, dz = 0;
                         if (hasImg) {
                             const img = results.landmarks[0];
@@ -473,10 +472,8 @@
                             dz = -(worldHipZ - baseWorldZ) * DEPTH_SCALE;
                         }
 
-                        // === 一旦 Hips を仮置き(Yはバインド値)→ ボーン姿勢を適用 ===
                         B.hips.position.set(bindHipsLocalPos.x + dx, bindHipsLocalPos.y, bindHipsLocalPos.z + dz);
 
-                        // Hips 回転
                         tmpHipMid.addVectors(lm[23], lm[24]).multiplyScalar(0.5);
                         tmpHipRight.subVectors(lm[23], lm[24]).normalize();
                         tmpShoulderMid.addVectors(lm[11], lm[12]).multiplyScalar(0.5);
@@ -489,7 +486,6 @@
 
                         avatar.updateMatrixWorld(true);
 
-                        // 四肢
                         tmpA.subVectors(lm[13], lm[11]).normalize();
                         applyBoneByDirection(B.lArm, bindDir.lArm, tmpA, bindWorldQuat.lArm);
                         avatar.updateMatrixWorld(true);
@@ -516,11 +512,10 @@
 
                         avatar.updateMatrixWorld(true);
 
-                        // === ★しゃがみ対応：足の最低点を Y=0 に合わせる Y オフセットを計算 ===
+                        // しゃがみ対応：足の最低点を Y=0 に
                         B.lFoot.getWorldPosition(tmpFootL);
                         B.rFoot.getWorldPosition(tmpFootR);
                         const minFootY = Math.min(tmpFootL.y, tmpFootR.y);
-                        // 現在の Hips Y を minFootY 分だけ持ち上げる（minFootYがマイナスなら下に下げる）
                         const newHipY = B.hips.position.y - minFootY;
                         targetHipPos.set(B.hips.position.x, newHipY, B.hips.position.z);
 
@@ -533,15 +528,13 @@
                         B.hips.position.copy(currentHipPos);
                         avatar.updateMatrixWorld(true);
 
-                        // === スティック更新（ボーン位置から取得して反映）===
-                        // worldLandmarks(lm)はそのまま腰中心座標 → Hipsのワールド位置にオフセット
-                        const hipWorldPos = new THREE.Vector3();
+                        // スティック更新
                         B.hips.getWorldPosition(hipWorldPos);
+                        const lmHipY = (lm[23].y + lm[24].y) * 0.5;
                         for (let i = 0; i < 33; i++) {
-                            // 顔の細かい点は非表示なので位置だけ仮セット
                             stickJoints[i].position.set(
                                 hipWorldPos.x + lm[i].x,
-                                hipWorldPos.y + lm[i].y - (lm[23].y + lm[24].y) * 0.5,
+                                hipWorldPos.y + lm[i].y - lmHipY,
                                 hipWorldPos.z + lm[i].z
                             );
                         }
@@ -558,20 +551,26 @@
                     }
                 }
 
-                // ===== 4ビュー描画 =====
-                function setLabel(el, x, y, w, h) {
-                    el.style.left = (x + 6) + 'px';
-                    el.style.top = (y + 4) + 'px';
+                // ===== 4ビュー描画（アスペクト比対応） =====
+                // 縦表示範囲は ORTHO_HALF_HEIGHT 固定、横はビューポート比に合わせて自動計算
+                function updateOrthoCam(cam, viewW, viewH) {
+                    const aspect = viewW / viewH;
+                    cam.top    =  ORTHO_HALF_HEIGHT;
+                    cam.bottom = -ORTHO_HALF_HEIGHT;
+                    cam.left   = -ORTHO_HALF_HEIGHT * aspect;
+                    cam.right  =  ORTHO_HALF_HEIGHT * aspect;
+                    cam.updateProjectionMatrix();
                 }
+
                 function renderView(cam, x, y, w, h) {
-                    renderer.setViewport(x, y, w, h);
-                    renderer.setScissor(x, y, w, h);
                     if (cam.isOrthographicCamera) {
-                        // 直交カメラの aspect を保つ
+                        updateOrthoCam(cam, w, h);
                     } else {
                         cam.aspect = w / h;
                         cam.updateProjectionMatrix();
                     }
+                    renderer.setViewport(x, y, w, h);
+                    renderer.setScissor(x, y, w, h);
                     renderer.render(scene, cam);
                 }
 
@@ -584,26 +583,21 @@
                     const H = canvasContainer.clientHeight;
                     const halfW = Math.floor(W / 2);
                     const halfH = Math.floor(H / 2);
-                    // CSS座標(原点=左上)とWebGL座標(原点=左下)を変換
-                    // 左上：Perspective, 右上：Front, 左下：Side, 右下：Top
-                    // WebGLでy=H-高さで指定
+
                     renderer.setClearColor(0x1a1a1a, 1);
                     renderer.clear();
 
-                    renderView(persCam,  0,          halfH,       halfW, halfH);  // 左上
-                    renderView(frontCam, halfW,      halfH,       halfW, halfH);  // 右上
-                    renderView(sideCam,  0,          0,           halfW, halfH);  // 左下
-                    renderView(topCam,   halfW,      0,           halfW, halfH);  // 右下
+                    // WebGL座標は左下原点
+                    renderView(persCam,  0,     halfH, halfW, halfH);
+                    renderView(frontCam, halfW, halfH, halfW, halfH);
+                    renderView(sideCam,  0,     0,     halfW, halfH);
+                    renderView(topCam,   halfW, 0,     halfW, halfH);
 
-                    // ラベル位置（CSS座標）
-                    labelPerspective.style.left = '6px';
-                    labelPerspective.style.top = '4px';
-                    labelFront.style.left = (halfW + 6) + 'px';
-                    labelFront.style.top = '4px';
-                    labelSide.style.left = '6px';
-                    labelSide.style.top = (halfH + 4) + 'px';
-                    labelTop.style.left = (halfW + 6) + 'px';
-                    labelTop.style.top = (halfH + 4) + 'px';
+                    // ラベル位置（CSSは左上原点）
+                    labelPerspective.style.left = '6px';        labelPerspective.style.top = '4px';
+                    labelFront.style.left = (halfW + 6) + 'px'; labelFront.style.top = '4px';
+                    labelSide.style.left = '6px';               labelSide.style.top = (halfH + 4) + 'px';
+                    labelTop.style.left = (halfW + 6) + 'px';   labelTop.style.top = (halfH + 4) + 'px';
                 }
 
                 window.addEventListener('resize', () => {
