@@ -158,7 +158,10 @@ const VISIBILITY_TH    = 0.5;
 const ORTHO_HALF_HEIGHT = 1.5;
 const ORTHO_CENTER_Y    = 0.9;
 const GROUND_OFFSET    = 0.02;
+const GROUND_EPSILON   = 0.005;
 const MIN_HIP_HEIGHT   = 0.3;
+// しゃがみで画面上の身長が縮んでも、距離推定が急に奥へ飛ばないようにする下限。
+const MIN_DISTANCE_HEIGHT_RATIO = 0.75;
 const SCENE_WIDTH      = 6.0;
 const REF_DISTANCE     = 4.0;
 const MAX_PERSONS      = 3;
@@ -340,6 +343,7 @@ async function main(){
       this.posInited = false;
       this.active = false;
       this.lastPx = 0; this.lastPy = 0;
+      this.avatarBox = new THREE.Box3();
     }
     setVisible(showAvatar, showStick){
       this.avatar.visible = this.active && showAvatar;
@@ -582,12 +586,14 @@ async function main(){
     else footYn = (lm[25].y + lm[26].y) / 2;
     const heightPx = Math.max(0.05, footYn - headYn);
 
-    if(baselineHeightPx === 0 && lAnkleVis && rAnkleVis){
-      baselineHeightPx = heightPx;
+    if(lAnkleVis && rAnkleVis){
+      // 初回フレームが中腰でも、後から全身が伸びたフレームを基準に更新する。
+      baselineHeightPx = Math.max(baselineHeightPx, heightPx);
     }
     const refH = baselineHeightPx > 0 ? baselineHeightPx : heightPx;
+    const heightForDistance = Math.max(heightPx, refH * MIN_DISTANCE_HEIGHT_RATIO);
 
-    const distance = REF_DISTANCE * (refH / heightPx);
+    const distance = REF_DISTANCE * (refH / heightForDistance);
     const targetHipZ = REF_DISTANCE - distance;
 
     const footXn = (lAnkleVis && rAnkleVis) ? (lm[27].x + lm[28].x)/2 :
@@ -610,6 +616,20 @@ async function main(){
       person.smoothedHip.lerp(target, POS_SMOOTH);
     }
     person.B.hips.position.copy(person.smoothedHip);
+  }
+
+  function keepAvatarAboveGround(person){
+    // ポーズ適用後の実メッシュ境界を見て、足や膝が床を突き抜けた分だけ腰を持ち上げる。
+    person.avatar.updateMatrixWorld(true);
+    person.avatarBox.setFromObject(person.avatar);
+    const minY = person.avatarBox.min.y;
+    if(!isFinite(minY)) return;
+    const lift = GROUND_OFFSET - minY;
+    if(lift > GROUND_EPSILON){
+      person.smoothedHip.y += lift;
+      person.B.hips.position.y += lift;
+      person.avatar.updateMatrixWorld(true);
+    }
   }
 
   function updateStick(person, landmarks, worldLandmarks){
@@ -698,6 +718,7 @@ async function main(){
             const wlm = result.worldLandmarks[detIdx];
             applyPose(person, lm, wlm);
             updateHipPosition(person, lm, wlm);
+            keepAvatarAboveGround(person);
             updateStick(person, lm, wlm);
           });
           refreshVisibility();
