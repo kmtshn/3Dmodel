@@ -249,12 +249,12 @@ const POS_SMOOTH       = 0.25;
 const VISIBILITY_TH    = 0.5;
 const ORTHO_HALF_HEIGHT = 1.5;
 const ORTHO_CENTER_Y    = 0.9;
-const GROUND_OFFSET    = 0.02;
+const GROUND_OFFSET    = 0.04; // 足裏のめり込み補正分を含む床オフセット
 const MIN_DISTANCE_HEIGHT_RATIO = 0.75;
 const SCENE_WIDTH      = 6.0;
 const REF_DISTANCE     = 4.0;
 const MAX_PERSONS      = 3;
-const LOST_GRACE       = 15; // 未検出を許容するフレーム数
+const LOST_GRACE       = 15;
 
 let lastTs = 0;
 let lastVideoTime = -1;
@@ -398,9 +398,11 @@ async function main(){
         lHip: bn.mixamorigLeftUpLeg,
         lKnee: bn.mixamorigLeftLeg,
         lAnkle: bn.mixamorigLeftFoot,
+        lToe: bn.mixamorigLeftToeBase,
         rHip: bn.mixamorigRightUpLeg,
         rKnee: bn.mixamorigRightLeg,
         rAnkle: bn.mixamorigRightFoot,
+        rToe: bn.mixamorigRightToeBase,
       };
       this.bindHipsPos = this.B.hips.position.clone();
       this.bindHipsQuat = this.B.hips.quaternion.clone();
@@ -474,7 +476,6 @@ async function main(){
     });
   });
 
-  // レイアウト切替
   document.getElementById('layout-btn').addEventListener('click', (ev) => {
     quadView = !quadView;
     ev.currentTarget.classList.toggle('active', quadView);
@@ -523,7 +524,12 @@ async function main(){
     overlay.style.display = 'flex';
     await createPoseLandmarker(numPosesWanted);
     overlay.style.display = 'none';
-    persons.forEach((p,i) => { p.active = (i===0 && !video.src); p.posInited = false; p.lostFrames = LOST_GRACE+1; p.resetPose(); });
+    persons.forEach((p,i) => {
+      p.active = (i===0);
+      p.posInited = false;
+      p.lostFrames = (i===0) ? 0 : (LOST_GRACE+1);
+      p.resetPose();
+    });
     refreshVisibility();
   });
 
@@ -534,7 +540,13 @@ async function main(){
     const f = e.target.files[0]; if(!f) return;
     if(video.src) URL.revokeObjectURL(video.src);
     video.src = URL.createObjectURL(f);
-    persons.forEach(p => { p.active = false; p.posInited = false; p.lostFrames = LOST_GRACE+1; p.resetPose(); });
+    // 1人目は最初の検出が来るまで待機ポーズで表示を維持(消さない)
+    persons.forEach((p,i) => {
+      p.active = (i === 0);
+      p.posInited = false;
+      p.lostFrames = (i === 0) ? 0 : (LOST_GRACE + 1);
+      p.resetPose();
+    });
     refreshVisibility();
     lastTs = 0; lastVideoTime = -1;
     baselineHeightPx = 0;
@@ -556,6 +568,7 @@ async function main(){
   const _vb = new THREE.Vector3();
   const _parentQ = new THREE.Quaternion();
   const _targetQ = new THREE.Quaternion();
+  const _tmpFoot = new THREE.Vector3();
 
   function setBoneDirection(bone, dirWorld, bindDirLocal, smooth=POSE_SMOOTH){
     if(!bone || !bone.parent) return;
@@ -650,11 +663,14 @@ async function main(){
     person.avatar.position.x = person.smoothedHip.x;
     person.avatar.position.z = person.smoothedHip.z;
 
-    // 接地: 足首ワールドYが床(0)に来るよう avatar.position.y を目標値追従
+    // 接地: 足首・つま先の最下点が床(0)に来るよう目標値追従
     person.avatar.updateMatrixWorld(true);
-    const lAnkleW = new THREE.Vector3(); person.B.lAnkle.getWorldPosition(lAnkleW);
-    const rAnkleW = new THREE.Vector3(); person.B.rAnkle.getWorldPosition(rAnkleW);
-    const footY = Math.min(lAnkleW.y, rAnkleW.y);
+    const footBones = [person.B.lAnkle, person.B.rAnkle, person.B.lToe, person.B.rToe];
+    let footY = Infinity;
+    for(const b of footBones){
+      if(b){ b.getWorldPosition(_tmpFoot); footY = Math.min(footY, _tmpFoot.y); }
+    }
+    if(!isFinite(footY)) footY = 0;
     const targetY = person.avatar.position.y - footY + GROUND_OFFSET;
     person.avatar.position.y += (targetY - person.avatar.position.y) * POS_SMOOTH;
   }
@@ -708,7 +724,6 @@ async function main(){
             placePerson(p, normArr[i]);
             updateStick(p, worldArr[i]);
           } else {
-            // 未検出: 猶予フレーム内は前姿勢を保持
             p.lostFrames++;
             if(p.lostFrames > LOST_GRACE) p.active = false;
           }
