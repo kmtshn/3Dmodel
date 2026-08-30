@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<title>Realtime 3D Motion Capture</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+:root{color-scheme:dark;--bg:#08111f;--panel:#0f1b2d;--panel2:#13233a;--line:#263951;--text:#e8eef7;--muted:#8fa2bb;--accent:#4da3ff;--green:#34d399;--red:#fb7185}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+button,select,input{font:inherit}
+button,select,.file-btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:10px;min-height:38px;padding:7px 11px}
+button,.file-btn{cursor:pointer}
+button:hover,.file-btn:hover{border-color:#4c6788}
+button.primary{background:#1677d2;border-color:#2d90ea}
+button.danger{background:#49202a;border-color:#71313f}
+button.active{outline:2px solid rgba(77,163,255,.45);border-color:var(--accent)}
+button:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+.hidden{display:none!important}
+#app{height:100%;display:grid;grid-template-rows:auto 1fr auto;min-height:0}
+header{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);background:rgba(11,24,40,.96);flex-wrap:wrap;z-index:10}
+.brand{display:flex;align-items:center;gap:9px;margin-right:auto;min-width:190px}.dot{width:9px;height:9px;border-radius:50%;background:#64748b;box-shadow:0 0 0 4px rgba(100,116,139,.12)}.dot.live{background:var(--red);box-shadow:0 0 0 4px rgba(251,113,133,.12)}
+.brand strong{font-size:14px;letter-spacing:.02em}.brand small{display:block;color:var(--muted);font-size:10px;margin-top:1px}
+.group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.group label{font-size:11px;color:var(--muted)}
+#stage{position:relative;min-height:0;overflow:hidden;background:radial-gradient(circle at 50% 36%,#142640 0,#0b1727 44%,#08111f 100%)}
+#main-canvas{display:block;width:100%;height:100%}
+#preview{position:absolute;right:14px;bottom:14px;width:min(32vw,380px);aspect-ratio:16/9;border:1px solid #385274;border-radius:14px;background:#020617;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,.35);z-index:5}
+#preview video{display:block;width:100%;height:100%;object-fit:contain;background:#020617}
+#preview .tag{position:absolute;left:8px;top:8px;padding:4px 7px;border-radius:999px;background:rgba(2,6,23,.75);font-size:10px;color:#dbeafe;border:1px solid rgba(148,163,184,.25)}
+#hud{position:absolute;left:14px;top:14px;display:grid;gap:7px;pointer-events:none;z-index:4}
+.hud-card{background:rgba(5,13,25,.72);border:1px solid rgba(74,104,140,.4);backdrop-filter:blur(8px);border-radius:10px;padding:8px 10px;min-width:160px}
+.hud-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}.hud-value{font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:3px;white-space:pre-line}
+#notice{position:absolute;left:50%;top:18px;transform:translateX(-50%);max-width:min(680px,80vw);padding:8px 12px;border-radius:10px;background:rgba(5,13,25,.8);border:1px solid rgba(74,104,140,.45);font-size:12px;color:#cbd5e1;text-align:center;z-index:6}
+#overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,13,25,.9);z-index:20;text-align:center;padding:24px}.loader{width:34px;height:34px;border-radius:50%;border:3px solid #253b58;border-top-color:var(--accent);animation:spin .8s linear infinite;margin:0 auto 14px}@keyframes spin{to{transform:rotate(360deg)}}
+#overlay strong{font-size:15px}#overlay p{font-size:12px;color:var(--muted);margin:6px 0 0}
+#error{position:absolute;left:12px;right:12px;bottom:12px;z-index:30;background:rgba(120,25,39,.96);border:1px solid #fb7185;color:white;border-radius:10px;padding:10px 12px;font-size:12px;white-space:pre-wrap;max-height:35%;overflow:auto}
+footer{display:flex;gap:12px;align-items:center;min-height:31px;padding:5px 12px;border-top:1px solid var(--line);background:#0b1828;color:var(--muted);font-size:10px;flex-wrap:wrap}
+.file-btn input{display:none}
+@media(max-width:760px){header{gap:7px;padding:8px}.brand{width:100%;margin-right:0}.group{width:100%}.group>*{flex:1 1 auto}#preview{width:42vw;right:8px;bottom:8px}#hud{left:8px;top:8px}.hud-card{min-width:125px;padding:6px 8px}.hud-value{font-size:11px}#notice{top:auto;bottom:8px;left:8px;right:8px;transform:none;max-width:none}.with-preview #notice{bottom:calc(42vw * 9 / 16 + 16px)}}
+</style>
+</head>
+<body>
+<div id="app">
+<header>
+  <div class="brand"><span id="live-dot" class="dot"></span><div><strong>Realtime 3D Motion Capture</strong><small>MediaPipe Pose + Three.js</small></div></div>
+  <div class="group">
+    <button id="camera-mode" class="primary active">カメラ</button>
+    <label class="file-btn">動画ファイル<input type="file" id="file-input" accept="video/*"></label>
+  </div>
+  <div class="group">
+    <select id="camera-select" aria-label="カメラ選択"><option value="">カメラを選択</option></select>
+    <button id="start-btn" class="primary">カメラ開始</button>
+    <button id="stop-btn" class="danger" disabled>停止</button>
+  </div>
+  <div class="group">
+    <label>人数</label><select id="person-count"><option value="1">1人</option><option value="2">2人</option><option value="3">3人</option></select>
+    <button id="preview-btn" class="active">入力映像</button>
+    <button id="skeleton-btn">骨格</button>
+    <button id="flip-btn">前後反転</button>
+    <button id="reset-btn">基準リセット</button>
+  </div>
+</header>
+<main id="stage" class="with-preview">
+  <canvas id="main-canvas"></canvas>
+  <div id="preview"><span id="preview-tag" class="tag">CAMERA</span><video id="input-video" playsinline muted></video></div>
+  <div id="hud">
+    <div class="hud-card"><div class="hud-title">Tracking</div><div id="tracking" class="hud-value">待機中</div></div>
+    <div class="hud-card"><div class="hud-title">Performance</div><div id="perf" class="hud-value">Render -- FPS\nPose -- FPS</div></div>
+  </div>
+  <div id="notice">「カメラ開始」を押すと、カメラ映像から人物の姿勢を推定して3Dモデルへ反映します。</div>
+  <div id="overlay"><div><div class="loader"></div><strong id="load-title">AIモデルを準備しています</strong><p id="load-sub">初回はモデルファイルの読み込みに少し時間がかかります。</p></div></div>
+  <div id="error" class="hidden"></div>
+</main>
+<footer><span>カメラ利用には HTTPS または localhost が必要です。</span><span>入力映像はブラウザ内で処理され、このアプリ自身は録画・アップロードしません。</span></footer>
+</div>
+<script type="module">
+const $ = (id)=>document.getElementById(id);
+const video=$('input-video'), canvas=$('main-canvas'), stage=$('stage');
+const overlay=$('overlay'), errorBox=$('error'), notice=$('notice');
+const tracking=$('tracking'), perf=$('perf'), liveDot=$('live-dot');
+let stream=null, inputMode='camera', previewVisible=true, showSkeleton=false, forwardFlip=false;
+let poseLandmarker=null, persons=[], baselineHeightNorm=0, lastVideoTime=-1, lastPoseAt=0;
+let refreshVisibility=()=>{};
+let renderFrames=0, poseFrames=0, statAt=performance.now(), currentRenderFps=0, currentPoseFps=0;
+const MAX_PERSONS=3, LOST_GRACE=12, POSE_SMOOTH=.36, POS_SMOOTH=.25, VISIBILITY_TH=.5, GROUND_OFFSET=.035, REF_DISTANCE=4, SCENE_WIDTH=5.5, MIN_DISTANCE_HEIGHT_RATIO=.72;
+
+function setError(message){errorBox.textContent=message;errorBox.classList.remove('hidden');console.error(message)}
+function clearError(){errorBox.classList.add('hidden');errorBox.textContent=''}
+function setOverlay(title,sub=''){ $('load-title').textContent=title;$('load-sub').textContent=sub;overlay.classList.remove('hidden') }
+function hideOverlay(){overlay.classList.add('hidden')}
+function setNotice(text){notice.textContent=text;notice.classList.remove('hidden')}
+function stopTracks(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}video.srcObject=null;liveDot.classList.remove('live');$('stop-btn').disabled=true}
+
+async function listCameras(){
+  try{
+    const devices=await navigator.mediaDevices.enumerateDevices();
+    const cams=devices.filter(d=>d.kind==='videoinput');
+    const select=$('camera-select'), prev=select.value;
+    select.innerHTML='';
+    cams.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||`カメラ ${i+1}`;select.appendChild(o)});
+    if(!cams.length){const o=document.createElement('option');o.value='';o.textContent='カメラが見つかりません';select.appendChild(o)}
+    else if(cams.some(c=>c.deviceId===prev)) select.value=prev;
+  }catch(e){console.warn(e)}
+}
+
+async function startCamera(){
+  clearError(); inputMode='camera'; $('camera-mode').classList.add('active'); $('preview-tag').textContent='CAMERA';
+  if(!navigator.mediaDevices?.getUserMedia){setError('このブラウザはカメラAPIに対応していません。');return}
+  stopTracks();
+  try{
+    const id=$('camera-select').value;
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{deviceId:id?{exact:id}:undefined,width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:60}}});
+    video.removeAttribute('src'); video.srcObject=stream; video.muted=true; video.playsInline=true;
+    await video.play();
+    await listCameras();
+    $('stop-btn').disabled=false; liveDot.classList.add('live'); resetTracking();
+    setNotice('LIVE：カメラの前で全身が映る位置に立ってください。');
+  }catch(e){stopTracks();setError(`カメラを開始できません。\n${e.name||''}: ${e.message||e}\n\nHTTPS または localhost で開き、ブラウザのカメラ権限を許可してください。`)}
+}
+
+function resetTracking(){baselineHeightNorm=0;lastVideoTime=-1;persons.forEach((p,i)=>{p.active=i===0;p.lostFrames=i===0?0:LOST_GRACE+1;p.posInited=false;p.resetPose()});refreshVisibility()}
+
+$('camera-mode').addEventListener('click',startCamera);
+$('start-btn').addEventListener('click',startCamera);
+$('stop-btn').addEventListener('click',()=>{video.pause();stopTracks();setNotice('カメラを停止しました。');tracking.textContent='停止';});
+$('camera-select').addEventListener('change',()=>{if(stream)startCamera()});
+$('preview-btn').addEventListener('click',e=>{previewVisible=!previewVisible;$('preview').classList.toggle('hidden',!previewVisible);stage.classList.toggle('with-preview',previewVisible);e.currentTarget.classList.toggle('active',previewVisible)});
+$('skeleton-btn').addEventListener('click',e=>{showSkeleton=!showSkeleton;e.currentTarget.classList.toggle('active',showSkeleton);refreshVisibility()});
+$('flip-btn').addEventListener('click',e=>{forwardFlip=!forwardFlip;e.currentTarget.classList.toggle('active',forwardFlip)});
+$('reset-btn').addEventListener('click',()=>{resetTracking();setNotice('基準位置をリセットしました。')});
+$('file-input').addEventListener('change',async e=>{
+  const f=e.target.files?.[0];if(!f)return;clearError();stopTracks();inputMode='file';$('camera-mode').classList.remove('active');$('preview-tag').textContent='VIDEO';
+  if(video.dataset.objectUrl)URL.revokeObjectURL(video.dataset.objectUrl);
+  const url=URL.createObjectURL(f);video.dataset.objectUrl=url;video.srcObject=null;video.src=url;video.loop=true;video.muted=true;resetTracking();
+  try{await video.play();liveDot.classList.add('live');setNotice(`動画解析中：${f.name}`)}catch(err){setError(`動画を再生できません: ${err.message||err}`)}
+});
+
+window.addEventListener('pagehide',()=>{stopTracks();if(poseLandmarker)try{poseLandmarker.close()}catch{}});
+
+async function main(){
+  try{
+    setOverlay('Three.js を読み込んでいます','3Dシーンを準備中');
+    const THREE=await import('three');
+    const [controlsMod,loaderMod,skeletonMod,mp]=await Promise.all([
+      import('three/addons/controls/OrbitControls.js'),
+      import('three/addons/loaders/GLTFLoader.js'),
+      import('three/addons/utils/SkeletonUtils.js'),
+      import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs')
+    ]);
+    const {OrbitControls}=controlsMod;
+    const {GLTFLoader}=loaderMod;
+    const {clone:skeletonClone}=skeletonMod;
+    const {PoseLandmarker,FilesetResolver}=mp;
+
+    const scene=new THREE.Scene(); scene.background=new THREE.Color(0x08111f); scene.fog=new THREE.Fog(0x08111f,12,34);
+    scene.add(new THREE.HemisphereLight(0xffffff,0x1d3554,.95));
+    const dl=new THREE.DirectionalLight(0xffffff,1.35);dl.position.set(3,7,4);dl.castShadow=true;dl.shadow.mapSize.set(2048,2048);scene.add(dl);
+    const floor=new THREE.Mesh(new THREE.PlaneGeometry(28,28),new THREE.MeshStandardMaterial({color:0x132238,roughness:.9}));floor.rotation.x=-Math.PI/2;floor.receiveShadow=true;scene.add(floor);
+    scene.add(new THREE.GridHelper(28,28,0x2d4665,0x172a43));
+
+    const renderer=new THREE.WebGLRenderer({canvas,antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.shadowMap.enabled=true;
+    const camera=new THREE.PerspectiveCamera(43,1,.1,100);camera.position.set(4.5,2.9,6.5);camera.lookAt(0,.9,0);
+    const controls=new OrbitControls(camera,canvas);controls.target.set(0,.9,0);controls.enableDamping=true;controls.minDistance=2;controls.maxDistance=22;
+
+    setOverlay('3Dモデルを読み込んでいます','Xbot GLB');
+    const gltf=await new Promise((resolve,reject)=>new GLTFLoader().load('https://cdn.jsdelivr.net/gh/mrdoob/three.js@r158/examples/models/gltf/Xbot.glb',resolve,undefined,reject));
+    const template=gltf.scene;
+    const STICK_BONES=[[11,13],[13,15],[12,14],[14,16],[11,12],[23,24],[11,23],[12,24],[23,25],[25,27],[27,31],[24,26],[26,28],[28,32]];
+    const COLORS=[0x5fa8ff,0xff7a90,0x5bd6a8];
+
+    function measureBindDirs(avatar){
+      avatar.updateMatrixWorld(true);const bn={};avatar.traverse(o=>{if(o.isBone)bn[o.name]=o});
+      function dir(parent,child){if(!parent||!child)return new THREE.Vector3(0,1,0);const a=new THREE.Vector3(),b=new THREE.Vector3(),q=new THREE.Quaternion();parent.getWorldPosition(a);child.getWorldPosition(b);parent.getWorldQuaternion(q);return b.sub(a).normalize().applyQuaternion(q.invert()).normalize()}
+      return{lShoulder:dir(bn.mixamorigLeftArm,bn.mixamorigLeftForeArm),lElbow:dir(bn.mixamorigLeftForeArm,bn.mixamorigLeftHand),rShoulder:dir(bn.mixamorigRightArm,bn.mixamorigRightForeArm),rElbow:dir(bn.mixamorigRightForeArm,bn.mixamorigRightHand),lHip:dir(bn.mixamorigLeftUpLeg,bn.mixamorigLeftLeg),lKnee:dir(bn.mixamorigLeftLeg,bn.mixamorigLeftFoot),rHip:dir(bn.mixamorigRightUpLeg,bn.mixamorigRightLeg),rKnee:dir(bn.mixamorigRightLeg,bn.mixamorigRightFoot)}
+    }
+    const temp=skeletonClone(template);scene.add(temp);const bindDirs=measureBindDirs(temp);scene.remove(temp);
+
+    class Person{
+      constructor(id){
+        this.id=id;this.color=COLORS[id];this.bindDirs=bindDirs;this.avatar=skeletonClone(template);this.avatar.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;if(o.material){o.material=o.material.clone();if(o.material.color)o.material.color.setHex(this.color)}}});scene.add(this.avatar);
+        const bn={};this.avatar.traverse(o=>{if(o.isBone)bn[o.name]=o});this.B={hips:bn.mixamorigHips,lShoulder:bn.mixamorigLeftArm,lElbow:bn.mixamorigLeftForeArm,rShoulder:bn.mixamorigRightArm,rElbow:bn.mixamorigRightForeArm,lHip:bn.mixamorigLeftUpLeg,lKnee:bn.mixamorigLeftLeg,lAnkle:bn.mixamorigLeftFoot,lToe:bn.mixamorigLeftToeBase,rHip:bn.mixamorigRightUpLeg,rKnee:bn.mixamorigRightLeg,rAnkle:bn.mixamorigRightFoot,rToe:bn.mixamorigRightToeBase};
+        this.bindHipsPos=this.B.hips.position.clone();this.bindHipsQuat=this.B.hips.quaternion.clone();this.smoothedHipQuat=this.bindHipsQuat.clone();this.smoothedPos=new THREE.Vector3();this.posInited=false;this.active=false;this.lostFrames=LOST_GRACE+1;
+        this.stickGroup=new THREE.Group();scene.add(this.stickGroup);this.joints=[];const jGeo=new THREE.SphereGeometry(.025,10,10),jMat=new THREE.MeshStandardMaterial({color:this.color});for(let i=0;i<33;i++){const m=new THREE.Mesh(jGeo,jMat);this.stickGroup.add(m);this.joints.push(m)}const bMat=new THREE.MeshStandardMaterial({color:0xe2e8f0});this.sticks=STICK_BONES.map(()=>{const m=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,1,7),bMat);this.stickGroup.add(m);return m});
+      }
+      resetPose(){this.B.hips.position.copy(this.bindHipsPos);this.B.hips.quaternion.copy(this.bindHipsQuat);this.avatar.position.set(0,0,0);this.smoothedHipQuat.copy(this.bindHipsQuat);this.smoothedPos.set(0,0,0)}
+    }
+    persons=Array.from({length:MAX_PERSONS},(_,i)=>new Person(i));persons[0].active=true;persons[0].resetPose();
+    function refresh(){persons.forEach(p=>{p.avatar.visible=p.active;p.stickGroup.visible=p.active&&showSkeleton})}
+    refreshVisibility=refresh;refresh();
+
+    const vision=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm');
+    const MODEL_URL='https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
+    async function makeDetector(){
+      const numPoses=Number($('person-count').value)||1;
+      if(poseLandmarker)try{poseLandmarker.close()}catch{}
+      setOverlay('姿勢推定AIを準備しています',`検出人数: ${numPoses}`);
+      try{poseLandmarker=await PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:MODEL_URL,delegate:'GPU'},runningMode:'VIDEO',numPoses,minPoseDetectionConfidence:.5,minPosePresenceConfidence:.5,minTrackingConfidence:.5})}
+      catch(gpuErr){console.warn('GPU fallback',gpuErr);poseLandmarker=await PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:MODEL_URL,delegate:'CPU'},runningMode:'VIDEO',numPoses,minPoseDetectionConfidence:.5,minPosePresenceConfidence:.5,minTrackingConfidence:.5})}
+      hideOverlay();
+    }
+    await makeDetector();
+    $('person-count').addEventListener('change',async()=>{try{await makeDetector();resetTracking()}catch(e){setError(`検出器の再初期化に失敗しました: ${e.message||e}`)}});
+
+    const va=new THREE.Vector3(),vb=new THREE.Vector3(),vd=new THREE.Vector3(),parentQ=new THREE.Quaternion(),targetQ=new THREE.Quaternion(),tmpFoot=new THREE.Vector3(),p1=new THREE.Vector3(),p2=new THREE.Vector3(),mid=new THREE.Vector3(),yAxis=new THREE.Vector3(0,1,0);
+    const lmToVec3=(lm,out)=>out.set(lm.x,-lm.y,-lm.z);
+    const visible=lm=>lm&&(lm.visibility===undefined||lm.visibility>=VISIBILITY_TH);
+    function dirBetween(a,b,out){lmToVec3(b,vb);lmToVec3(a,va);return out.copy(vb).sub(va).normalize()}
+    function setBoneDirection(bone,dirWorld,bindDirLocal){if(!bone||!bone.parent||dirWorld.lengthSq()<1e-8)return;bone.parent.updateWorldMatrix(true,false);bone.parent.getWorldQuaternion(parentQ);const local=vd.copy(dirWorld).applyQuaternion(parentQ.clone().invert()).normalize();targetQ.setFromUnitVectors(bindDirLocal,local);bone.quaternion.slerp(targetQ,POSE_SMOOTH)}
+    function applyPose(p,L){
+      if(!L[11]||!L[12]||!L[23]||!L[24])return;const lSh=lmToVec3(L[11],new THREE.Vector3()),rSh=lmToVec3(L[12],new THREE.Vector3()),lHip=lmToVec3(L[23],new THREE.Vector3()),rHip=lmToVec3(L[24],new THREE.Vector3());
+      const hipMid=new THREE.Vector3().addVectors(lHip,rHip).multiplyScalar(.5),shMid=new THREE.Vector3().addVectors(lSh,rSh).multiplyScalar(.5),up=new THREE.Vector3().subVectors(shMid,hipMid).normalize(),right=new THREE.Vector3().subVectors(lSh,rSh).normalize();let fwd=new THREE.Vector3().crossVectors(right,up).normalize();if(forwardFlip)fwd.multiplyScalar(-1);const right2=new THREE.Vector3().crossVectors(up,fwd).normalize();
+      if(up.lengthSq()>1e-6&&fwd.lengthSq()>1e-6){const m=new THREE.Matrix4().makeBasis(right2,up,fwd),wq=new THREE.Quaternion().setFromRotationMatrix(m),pq=new THREE.Quaternion();p.B.hips.parent.updateWorldMatrix(true,false);p.B.hips.parent.getWorldQuaternion(pq);const lq=pq.invert().multiply(wq);p.smoothedHipQuat.slerp(lq,POSE_SMOOTH);p.B.hips.quaternion.copy(p.smoothedHipQuat)}
+      if(visible(L[11])&&visible(L[13]))setBoneDirection(p.B.lShoulder,dirBetween(L[11],L[13],vd),p.bindDirs.lShoulder);if(visible(L[13])&&visible(L[15]))setBoneDirection(p.B.lElbow,dirBetween(L[13],L[15],vd),p.bindDirs.lElbow);if(visible(L[12])&&visible(L[14]))setBoneDirection(p.B.rShoulder,dirBetween(L[12],L[14],vd),p.bindDirs.rShoulder);if(visible(L[14])&&visible(L[16]))setBoneDirection(p.B.rElbow,dirBetween(L[14],L[16],vd),p.bindDirs.rElbow);if(visible(L[23])&&visible(L[25]))setBoneDirection(p.B.lHip,dirBetween(L[23],L[25],vd),p.bindDirs.lHip);if(visible(L[25])&&visible(L[27]))setBoneDirection(p.B.lKnee,dirBetween(L[25],L[27],vd),p.bindDirs.lKnee);if(visible(L[24])&&visible(L[26]))setBoneDirection(p.B.rHip,dirBetween(L[24],L[26],vd),p.bindDirs.rHip);if(visible(L[26])&&visible(L[28]))setBoneDirection(p.B.rKnee,dirBetween(L[26],L[28],vd),p.bindDirs.rKnee)
+    }
+    function placePerson(p,N){if(!N?.[23]||!N?.[24])return;const top=Math.min(N[11]?.y??N[23].y,N[12]?.y??N[24].y),bottom=Math.max(N[27]?.y??N[23].y,N[28]?.y??N[24].y),height=Math.max(bottom-top,.05);if(!baselineHeightNorm)baselineHeightNorm=height;const ratio=Math.max(height/baselineHeightNorm,MIN_DISTANCE_HEIGHT_RATIO),dist=REF_DISTANCE/ratio,cx=(N[23].x+N[24].x)/2,worldX=(cx-.5)*SCENE_WIDTH,worldZ=-(dist-REF_DISTANCE);if(!p.posInited){p.smoothedPos.set(worldX,0,worldZ);p.posInited=true}else{p.smoothedPos.x+=(worldX-p.smoothedPos.x)*POS_SMOOTH;p.smoothedPos.z+=(worldZ-p.smoothedPos.z)*POS_SMOOTH}p.avatar.position.x=p.smoothedPos.x;p.avatar.position.z=p.smoothedPos.z;p.avatar.updateMatrixWorld(true);let footY=Infinity;for(const b of[p.B.lAnkle,p.B.rAnkle,p.B.lToe,p.B.rToe])if(b){b.getWorldPosition(tmpFoot);footY=Math.min(footY,tmpFoot.y)}if(!isFinite(footY))footY=0;const targetY=p.avatar.position.y-footY+GROUND_OFFSET;p.avatar.position.y+=(targetY-p.avatar.position.y)*POS_SMOOTH}
+    function updateStick(p,L){const base=p.avatar.position;for(let i=0;i<33;i++){const lm=L[i],j=p.joints[i];if(!lm){j.visible=false;continue}j.visible=true;j.position.set(base.x+lm.x,base.y+1-lm.y,base.z-lm.z)}STICK_BONES.forEach((pair,i)=>{const a=p.joints[pair[0]],b=p.joints[pair[1]],s=p.sticks[i];if(!a.visible||!b.visible){s.visible=false;return}s.visible=true;p1.copy(a.position);p2.copy(b.position);mid.copy(p1).add(p2).multiplyScalar(.5);s.position.copy(mid);const len=p1.distanceTo(p2);s.scale.set(1,Math.max(len,.001),1);s.quaternion.setFromUnitVectors(yAxis,vd.copy(p2).sub(p1).normalize())})}
+
+    function detect(){
+      if(!poseLandmarker||video.readyState<2||video.paused)return;
+      const mediaTime=video.currentTime;if(mediaTime===lastVideoTime)return;lastVideoTime=mediaTime;
+      const now=performance.now();
+      try{
+        const result=poseLandmarker.detectForVideo(video,now),world=result.worldLandmarks||[],norm=result.landmarks||[],n=Math.min(world.length,persons.length,Number($('person-count').value)||1);poseFrames++;
+        for(let i=0;i<persons.length;i++){const p=persons[i];if(i<n&&world[i]?.length>=33){p.active=true;p.lostFrames=0;applyPose(p,world[i]);placePerson(p,norm[i]);updateStick(p,world[i])}else{p.lostFrames++;if(p.lostFrames>LOST_GRACE)p.active=false}}
+        refresh();tracking.textContent=n?`${n} 人検出\n${inputMode==='camera'?'CAMERA LIVE':'VIDEO'}`:'人物を探しています';lastPoseAt=now;
+      }catch(e){if(performance.now()-lastPoseAt>1000)tracking.textContent='姿勢推定エラー';console.warn(e)}
+    }
+
+    function resize(){const w=stage.clientWidth,h=stage.clientHeight;if(canvas.width!==Math.floor(w*renderer.getPixelRatio())||canvas.height!==Math.floor(h*renderer.getPixelRatio()))renderer.setSize(w,h,false);camera.aspect=w/Math.max(h,1);camera.updateProjectionMatrix()}
+    function frame(){requestAnimationFrame(frame);detect();controls.update();resize();renderer.render(scene,camera);renderFrames++;const now=performance.now();if(now-statAt>=1000){const sec=(now-statAt)/1000;currentRenderFps=Math.round(renderFrames/sec);currentPoseFps=Math.round(poseFrames/sec);renderFrames=poseFrames=0;statAt=now;perf.textContent=`Render ${currentRenderFps} FPS\nPose ${currentPoseFps} FPS`}}
+    frame();
+
+    refreshVisibility=refresh;
+    hideOverlay();
+    if(navigator.mediaDevices){await listCameras();navigator.mediaDevices.addEventListener?.('devicechange',listCameras)}
+    if(!window.isSecureContext&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1')setNotice('このページは安全な接続ではないためカメラを開始できない可能性があります。HTTPSで開いてください。');
+  }catch(e){setError(`初期化に失敗しました。\n${e.stack||e.message||e}`);setOverlay('初期化に失敗しました','下部のエラー内容を確認してください。')}
+}
+
+main();
+</script>
+</body>
+</html>
